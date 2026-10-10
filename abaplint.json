@@ -13,7 +13,7 @@
     "empty_statement": true,
     "line_length": { "length": 120 },
     "max_one_statement": true,
-    "obsolete_statement": true,
+    "obsolete_statement": { "regex": false },
     "sequential_blank": true,
     "space_before_dot": true,
     "whitespace_end": true
