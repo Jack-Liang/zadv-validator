@@ -76,25 +76,30 @@ CLASS lcl_ddic_demo IMPLEMENTATION.
       RETURN.
     ENDIF.
 
+    " TYPE STANDARD TABLE OF (name) on purpose, same reason as the
+    " build_ddic_table helper in the unit tests: a table rebuilt from
+    " descriptors loses the DDIC row type and validate( ) would then
+    " degrade to the lenient mixed structure fallback
     TRY.
-        DATA(lo_tab) = CAST cl_abap_tabledescr(
-                         cl_abap_typedescr=>describe_by_name( lv_tabname ) ).
-      CATCH cx_root ##NO_TEXT.
-        WRITE: / `  skipped:`, lv_tabname, `cannot be described`.
+        CREATE DATA lr_tab TYPE STANDARD TABLE OF (lv_tabname).
+      CATCH cx_sy_create_data_error ##NO_TEXT.
+        WRITE: / `  skipped:`, lv_tabname, `cannot be created`.
         SKIP.
         RETURN.
     ENDTRY.
 
-    DATA(lo_line) = lo_tab->get_table_line_type( ).
-
-    CREATE DATA: lr_tab  TYPE HANDLE lo_tab,
-                 lr_line TYPE HANDLE lo_line.
-
     FIELD-SYMBOLS: <lt_rows> TYPE ANY TABLE,
                    <ls_row>  TYPE any,
                    <lv_val>  TYPE any.
-    ASSIGN: lr_tab->*  TO <lt_rows>,
-            lr_line->* TO <ls_row>.
+    ASSIGN lr_tab->* TO <lt_rows>.
+
+    DATA(lo_line) = CAST cl_abap_structdescr(
+                      CAST cl_abap_tabledescr(
+                        cl_abap_typedescr=>describe_by_data( <lt_rows> )
+                      )->get_table_line_type( ) ).
+
+    CREATE DATA lr_line TYPE HANDLE lo_line.
+    ASSIGN lr_line->* TO <ls_row>.
 
     LOOP AT it_rows INTO DATA(ls_row).
       LOOP AT ls_row-cells INTO DATA(ls_cell).

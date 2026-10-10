@@ -848,8 +848,8 @@ CLASS ltcl_validate IMPLEMENTATION.
 
   METHOD build_ddic_table.
     " unknown type -> unbound ref, the caller skips the test. Existence
-    " is pre-checked on dd02l: describe_by_name dumps (uncatchably) for
-    " unknown names on some releases, a SELECT cannot raise
+    " is pre-checked on dd02l: CREATE DATA with an unknown dynamic type
+    " name raises, and a SELECT cannot
     DATA(lv_name) = to_upper( CONV string( iv_tabname ) ).
 
     SELECT SINGLE @abap_true FROM dd02l
@@ -859,12 +859,14 @@ CLASS ltcl_validate IMPLEMENTATION.
       RETURN.
     ENDIF.
 
+    " TYPE STANDARD TABLE OF (name) on purpose: a table rebuilt from a
+    " struct descriptor (cl_abap_tabledescr=>create) loses the DDIC
+    " name of the row type, and validate( ) would then degrade to the
+    " mixed structure fallback - without foreign keys, currency and
+    " unit references (only element level metadata survives there)
     TRY.
-        DATA(lo_descr) = cl_abap_typedescr=>describe_by_name( lv_name ).
-        DATA(lo_tab) = cl_abap_tabledescr=>create(
-                         CAST cl_abap_structdescr( lo_descr ) ).
-        CREATE DATA rr_table TYPE HANDLE lo_tab.
-      CATCH cx_root ##NO_TEXT.
+        CREATE DATA rr_table TYPE STANDARD TABLE OF (lv_name).
+      CATCH cx_sy_create_data_error ##NO_TEXT.
         CLEAR rr_table.
     ENDTRY.
   ENDMETHOD.

@@ -2,6 +2,13 @@
 
 ## 未发布
 
+- 修复（真机单测四例失败，组合外键/CURR/QUAN 全部静默放行）：动态建表改用
+  `CREATE DATA ... TYPE STANDARD TABLE OF (name)`——`cl_abap_tabledescr=>create(
+  structdescr)` 重建的表丢失行类型 DDIC 名，validate( ) 退化到混合结构回退
+  路径，元素级 DFIES 无表字段级 CHECKTABLE/REFFIELD，外键与货币/单位参照
+  全部不触发（域固定值走元素域名故仍正常）；测试辅助 build_ddic_table 与
+  demo 的 lcl_ddic_demo 一并修正（demo 原来的 CAST tabledscr(describe_by_name)
+  对表名必然抛异常，v1.0 演示段实际从未跑过）
 - 修复（7.40 SP08 激活三处）：`prefetch_ckey_group` 的 `<lt_found>` 改为显式
   `TYPE STANDARD TABLE` 字段符号（内联声明从 `REF TO data` 推导出泛型，
   `INTO TABLE @<lt_found>` / `LOOP AT` 均报 not an internal table）；
