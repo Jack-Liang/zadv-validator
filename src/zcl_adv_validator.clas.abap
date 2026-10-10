@@ -27,8 +27,10 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       END OF ty_rule,
       ty_rules TYPE STANDARD TABLE OF ty_rule WITH EMPTY KEY,
 
-      "! column filter lists for only_fields( ) / exclude_fields( )
-      ty_fieldnames TYPE HASHED TABLE OF fieldname WITH UNIQUE KEY table_line.
+      "! column filter lists for only_fields( ) / exclude_fields( ).
+      "! String rows on purpose: short text literals like 'BUKRS' would be
+      "! rejected against a char-like elementary row type in VALUE #( ).
+      ty_fieldnames TYPE HASHED TABLE OF string WITH UNIQUE KEY table_line.
 
     CONSTANTS:
       "! Categories reported in ty_finding-check_type
@@ -415,7 +417,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
   METHOD only_fields.
     CLEAR mt_only_fields.
     LOOP AT it_fields INTO DATA(lv_field).
-      INSERT CONV fieldname( to_upper( lv_field ) ) INTO TABLE mt_only_fields.
+      DATA(lv_upper) = to_upper( lv_field ).
+      INSERT lv_upper INTO TABLE mt_only_fields.
     ENDLOOP.
   ENDMETHOD.
 
@@ -423,7 +426,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
   METHOD exclude_fields.
     CLEAR mt_exclude_fields.
     LOOP AT it_fields INTO DATA(lv_field).
-      INSERT CONV fieldname( to_upper( lv_field ) ) INTO TABLE mt_exclude_fields.
+      DATA(lv_upper) = to_upper( lv_field ).
+      INSERT lv_upper INTO TABLE mt_exclude_fields.
     ENDLOOP.
   ENDMETHOD.
 
