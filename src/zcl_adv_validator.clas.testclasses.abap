@@ -614,14 +614,14 @@ CLASS ltcl_validate IMPLEMENTATION.
     " the constants must stay consumable both via the interface and via
     " the class aliases, and the version must be plain semver so that
     " consumers can display or compare it
-    cl_abap_unit_assert=>assert_matches(
+    cl_abap_unit_assert=>assert_text_matches(
         pattern = '^[0-9]+\.[0-9]+\.[0-9]+$'
         text    = zif_adv_metadata=>c_version
         msg     = 'c_version is not MAJOR.MINOR.PATCH' ).
 
     cl_abap_unit_assert=>assert_not_initial(
         act = zif_adv_metadata=>c_author      msg = 'c_author is initial' ).
-    cl_abap_unit_assert=>assert_matches(
+    cl_abap_unit_assert=>assert_text_matches(
         pattern = '^https://github[.]com/[^/]+/[^/]+'
         text    = zif_adv_metadata=>c_repository
         msg     = 'c_repository is not a github url' ).

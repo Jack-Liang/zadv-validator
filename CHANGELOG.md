@@ -2,6 +2,13 @@
 
 ## 未发布
 
+- 修复：7.40 SP08 激活失败三处（上一轮 KNA1 修复后才暴露）——测试类
+  `assert_matches` 在旧 Basis 不存在，改用 `assert_text_matches`；
+  `build_msg` 的 iv_a/iv_b/iv_c 改按值传递（按引用的 string 参数收到
+  fieldname/domname 等 C(30) 实参不兼容，即 "not compatible with the
+  type STRING" 报错）；`prefetch_ckey_group` 去掉独立类型名
+  `abap_componentdescr_tab`（旧版本不可见，改由 create( ) 参数位的
+  VALUE # 推断组件表类型）
 - 修复：测试类静态引用 KNA1/MARA/VBAK，无对应应用 DDIC 的系统上整个类无法激活
   （Local Test Classes 报 Type "KNA1" is unknown）；改为运行时 RTTI 动态建表 +
   逐组件赋值，表不存在的系统上相关用例自动空跑跳过（VBELN ALPHA 用例同步加

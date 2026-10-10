@@ -402,12 +402,14 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         RETURNING VALUE(rv_ok) TYPE abap_bool,
 
       "! finding message text from the SE91 message class; operands for
-      "! unused placeholders are supplied blank
+      "! unused placeholders are supplied blank. Pass by value on
+      "! purpose: a by-reference string parameter would reject the
+      "! character-like call arguments (fieldname, domname, ...)
       build_msg
         IMPORTING iv_nr          TYPE ty_msgnr
-                  iv_a           TYPE string OPTIONAL
-                  iv_b           TYPE string OPTIONAL
-                  iv_c           TYPE string OPTIONAL
+                  VALUE(iv_a)    TYPE string OPTIONAL
+                  VALUE(iv_b)    TYPE string OPTIONAL
+                  VALUE(iv_c)    TYPE string OPTIONAL
         RETURNING VALUE(rv_text) TYPE string.
 
 ENDCLASS.
@@ -1489,11 +1491,13 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     " strips trailing blanks so found tuples compare cleanly with the
     " searched internal-format tuples
     TRY.
-        DATA(lt_comps) = VALUE abap_componentdescr_tab(
-                          FOR lv_f IN it_fields
-                          ( name = lv_f
-                            type = cl_abap_elemdescr=>get_c( 1333 ) ) ).
-        DATA(lo_str) = cl_abap_structdescr=>create( lt_comps ).
+        " VALUE # at the parameter position infers the component table
+        " type: the standalone name abap_componentdescr_tab is not
+        " visible on older Basis releases
+        DATA(lo_str) = cl_abap_structdescr=>create(
+                         VALUE #( FOR lv_f IN it_fields
+                                  ( name = lv_f
+                                    type = cl_abap_elemdescr=>get_c( 1333 ) ) ) ).
         DATA(lo_tab) = cl_abap_tabledescr=>create( lo_str ).
       CATCH cx_root ##NO_TEXT.
         RETURN.                            " pathological field names
