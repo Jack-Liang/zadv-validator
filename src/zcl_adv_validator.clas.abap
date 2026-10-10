@@ -517,9 +517,12 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                       && replace( val = iv_value sub = `'` with = `''` occ = 0 )
                       && |'|.
 
+        " fully classic Open SQL on purpose: strict mode syntax (@) must
+        " not be mixed with dynamic table/WHERE on older support packages
+        DATA lv_cnt TYPE i.
         SELECT COUNT( * ) FROM ( iv_table )
-               WHERE ( lv_where )
-               INTO @DATA(lv_cnt).
+               INTO lv_cnt
+               WHERE ( lv_where ).
 
         rv_ok = xsdbool( lv_cnt > 0 ).
 
