@@ -25,7 +25,12 @@ CLASS ltcl_validate DEFINITION FINAL
       rule_field_missing   FOR TESTING,
       only_fields_restricts FOR TESTING,
       exclude_fields_skips FOR TESTING,
-      only_field_unknown   FOR TESTING.
+      only_field_unknown   FOR TESTING,
+      element_value_valid  FOR TESTING,
+      element_value_invalid_domain FOR TESTING,
+      element_value_invalid_date   FOR TESTING,
+      field_value_invalid_domain   FOR TESTING,
+      field_value_unknown  FOR TESTING.
 ENDCLASS.
 
 
@@ -159,7 +164,7 @@ CLASS ltcl_validate IMPLEMENTATION.
     DATA(lv_invalid) = `20261301`.
 
     DATA(lo_validator) = NEW zcl_adv_validator( ).
-    lo_validator->only_fields( VALUE #( ( 'DATE' ) ) ).
+    lo_validator->only_fields( VALUE #( ( `DATE` ) ) ).
 
     DATA(lt_findings) = lo_validator->validate(
         VALUE ty_rows( ( status = 'Z' date = lv_invalid mail = 'x' ) ) ).
@@ -177,7 +182,7 @@ CLASS ltcl_validate IMPLEMENTATION.
     DATA(lv_invalid) = `20261301`.
 
     DATA(lo_validator) = NEW zcl_adv_validator( ).
-    lo_validator->exclude_fields( VALUE #( ( 'DATE' ) ) ).
+    lo_validator->exclude_fields( VALUE #( ( `DATE` ) ) ).
 
     DATA(lt_findings) = lo_validator->validate(
         VALUE ty_rows( ( status = 'Z' date = lv_invalid mail = 'x' ) ) ).
@@ -193,7 +198,7 @@ CLASS ltcl_validate IMPLEMENTATION.
 
   METHOD only_field_unknown.
     DATA(lo_validator) = NEW zcl_adv_validator( ).
-    lo_validator->only_fields( VALUE #( ( 'DOES_NOT_EXIST' ) ) ).
+    lo_validator->only_fields( VALUE #( ( `DOES_NOT_EXIST` ) ) ).
 
     DATA(lt_findings) = lo_validator->validate( VALUE ty_rows( ( ) ) ).
 
@@ -202,6 +207,90 @@ CLASS ltcl_validate IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
         exp = CONV string( zcl_adv_validator=>c_check-structure )
         act = CONV string( lt_findings[ 1 ]-check_type ) ).
+  ENDMETHOD.
+
+
+  METHOD element_value_valid.
+    DATA ls_finding TYPE zcl_adv_validator=>ty_finding.
+
+    DATA(lv_ok) = zcl_adv_validator=>check_value_by_element(
+                      EXPORTING iv_value    = 'A'
+                                iv_rollname = 'AS4LOCAL'
+                      IMPORTING es_finding  = ls_finding ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = abap_true act = lv_ok msg = 'A should be valid for AS4LOCAL' ).
+    cl_abap_unit_assert=>assert_initial(
+        act = ls_finding msg = 'no finding expected for valid value' ).
+  ENDMETHOD.
+
+
+  METHOD element_value_invalid_domain.
+    DATA ls_finding TYPE zcl_adv_validator=>ty_finding.
+
+    DATA(lv_ok) = zcl_adv_validator=>check_value_by_element(
+                      EXPORTING iv_value    = 'Z'
+                                iv_rollname = 'AS4LOCAL'
+                      IMPORTING es_finding  = ls_finding ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = abap_false act = lv_ok msg = 'Z should be invalid for AS4LOCAL' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-domain )
+        act = CONV string( ls_finding-check_type ) ).
+  ENDMETHOD.
+
+
+  METHOD element_value_invalid_date.
+    DATA lv_invalid TYPE string.
+    lv_invalid = `20261301`.
+
+    DATA ls_finding TYPE zcl_adv_validator=>ty_finding.
+
+    DATA(lv_ok) = zcl_adv_validator=>check_value_by_element(
+                      EXPORTING iv_value    = lv_invalid
+                                iv_rollname = 'BUDAT'
+                      IMPORTING es_finding  = ls_finding ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = abap_false act = lv_ok msg = '20261301 should be invalid for BUDAT' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-date )
+        act = CONV string( ls_finding-check_type ) ).
+  ENDMETHOD.
+
+
+  METHOD field_value_invalid_domain.
+    DATA ls_finding TYPE zcl_adv_validator=>ty_finding.
+
+    DATA(lv_ok) = zcl_adv_validator=>check_value_by_field(
+                      EXPORTING iv_value     = 'Z'
+                                iv_tabname   = 'DD07L'
+                                iv_fieldname = 'AS4LOCAL'
+                      IMPORTING es_finding   = ls_finding ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = abap_false act = lv_ok msg = 'Z should be invalid for DD07L-AS4LOCAL' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-domain )
+        act = CONV string( ls_finding-check_type ) ).
+  ENDMETHOD.
+
+
+  METHOD field_value_unknown.
+    DATA ls_finding TYPE zcl_adv_validator=>ty_finding.
+
+    DATA(lv_ok) = zcl_adv_validator=>check_value_by_field(
+                      EXPORTING iv_value     = 'X'
+                                iv_tabname   = 'DD01L'
+                                iv_fieldname = 'DOES_NOT_EXIST'
+                      IMPORTING es_finding   = ls_finding ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = abap_false act = lv_ok msg = 'unknown field must fail' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-structure )
+        act = CONV string( ls_finding-check_type ) ).
   ENDMETHOD.
 
 ENDCLASS.

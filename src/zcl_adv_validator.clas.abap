@@ -28,8 +28,10 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       ty_rules TYPE STANDARD TABLE OF ty_rule WITH EMPTY KEY,
 
       "! column filter lists for only_fields( ) / exclude_fields( ).
-      "! String rows on purpose: short text literals like 'BUKRS' would be
-      "! rejected against a char-like elementary row type in VALUE #( ).
+      "! Elementary row types demand constructor values COMPATIBLE with
+      "! the row type: 'BUKRS' (C literal) fits neither C(30) nor string,
+      "! so callers must use backtick string literals:
+      "! only_fields( VALUE #( ( `BUKRS` ) ) ).
       ty_fieldnames TYPE HASHED TABLE OF string WITH UNIQUE KEY table_line.
 
     CONSTANTS:
@@ -83,6 +85,28 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       "! customizing data may have changed during the lifetime of the
       "! validator instance.
       clear_caches.
+
+    CLASS-METHODS:
+      "! Check a single value against the DDIC definition (domain fixed
+      "! values, check table, conversion exit, format) of a data element.
+      "! rv_ok = abap_true means valid; if invalid, es_finding explains
+      "! why (row = 1, fieldname = element name). Initial values are
+      "! considered valid. The value may be passed in external format,
+      "! the conversion exit is applied internally.
+      check_value_by_element
+        IMPORTING iv_value     TYPE clike
+                  iv_rollname  TYPE clike
+        EXPORTING es_finding   TYPE ty_finding
+        RETURNING VALUE(rv_ok) TYPE abap_bool,
+
+      "! Same as check_value_by_element, but the DDIC definition is taken
+      "! from a field of a DDIC table or structure.
+      check_value_by_field
+        IMPORTING iv_value     TYPE clike
+                  iv_tabname   TYPE clike
+                  iv_fieldname TYPE clike
+        EXPORTING es_finding   TYPE ty_finding
+        RETURNING VALUE(rv_ok) TYPE abap_bool.
 
   PRIVATE SECTION.
 
@@ -180,7 +204,16 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
 
       conv_exit_exists
         IMPORTING iv_convexit      TYPE convexit
-        RETURNING VALUE(rv_ok)     TYPE abap_bool.
+        RETURNING VALUE(rv_ok)     TYPE abap_bool,
+
+      "! shared core of check_value_by_element / check_value_by_field:
+      "! wraps the value into a one-field anonymous structure and reuses
+      "! validate( ) on a fresh validator instance
+      check_single
+        IMPORTING iv_value     TYPE clike
+                  iv_rollname  TYPE clike
+        EXPORTING es_finding   TYPE ty_finding
+        RETURNING VALUE(rv_ok) TYPE abap_bool.
 
 ENDCLASS.
 
@@ -434,6 +467,129 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
   METHOD clear_caches.
     CLEAR: mt_domains, mt_ctab_hits, mt_convexits.
+  ENDMETHOD.
+
+
+  METHOD check_value_by_element.
+    rv_ok = check_single( EXPORTING iv_value    = iv_value
+                                  iv_rollname = iv_rollname
+                          IMPORTING es_finding = es_finding ).
+  ENDMETHOD.
+
+
+  METHOD check_value_by_field.
+    CLEAR es_finding.
+    rv_ok = abap_false.
+
+    DATA(lv_tabname) = to_upper( CONV string( iv_tabname ) ).
+    DATA(lv_field)   = to_upper( CONV string( iv_fieldname ) ).
+
+    DATA lo_struct TYPE REF TO cl_abap_structdescr.
+    TRY.
+        DATA(lo_descr) = cl_abap_typedescr=>describe_by_name( lv_tabname ).
+        IF lo_descr->kind = cl_abap_typedescr=>kind_table.
+          lo_descr = CAST cl_abap_tabledescr( lo_descr )->get_table_line_type( ).
+        ENDIF.
+        IF lo_descr->kind = cl_abap_typedescr=>kind_struct.
+          lo_struct = CAST cl_abap_structdescr( lo_descr ).
+        ENDIF.
+      CATCH cx_root ##NO_TEXT.
+        CLEAR lo_struct.
+    ENDTRY.
+
+    IF lo_struct IS INITIAL OR lo_struct->is_ddic_type( ) = abap_false.
+      es_finding-row        = 0.
+      es_finding-fieldname  = CONV fieldname( lv_field ).
+      es_finding-check_type = c_check-structure.
+      es_finding-message    = |{ lv_tabname } is not a DDIC table or structure|.
+      RETURN.
+    ENDIF.
+
+    TRY.
+        DATA(lt_dfies) = lo_struct->get_ddic_field_list( ).
+      CATCH cx_root ##NO_TEXT.
+        CLEAR lt_dfies.
+    ENDTRY.
+
+    READ TABLE lt_dfies INTO DATA(ls_dfies) WITH KEY fieldname = lv_field.
+    IF sy-subrc <> 0.
+      es_finding-row        = 0.
+      es_finding-fieldname  = CONV fieldname( lv_field ).
+      es_finding-check_type = c_check-structure.
+      es_finding-message    = |Field { lv_field } not found in { lv_tabname }|.
+      RETURN.
+    ENDIF.
+
+    IF ls_dfies-rollname IS INITIAL.
+      es_finding-row        = 0.
+      es_finding-fieldname  = CONV fieldname( lv_field ).
+      es_finding-check_type = c_check-structure.
+      es_finding-message    = |Field { lv_field } of { lv_tabname } has no data element|.
+      RETURN.
+    ENDIF.
+
+    rv_ok = check_single( EXPORTING iv_value    = iv_value
+                                  iv_rollname = ls_dfies-rollname
+                          IMPORTING es_finding = es_finding ).
+    es_finding-fieldname = CONV fieldname( lv_field ).
+  ENDMETHOD.
+
+
+  METHOD check_single.
+    CLEAR es_finding.
+    rv_ok = abap_false.
+
+    DATA(lv_rollname) = to_upper( CONV string( iv_rollname ) ).
+
+    DATA lo_descr TYPE REF TO cl_abap_typedescr.
+    TRY.
+        lo_descr = cl_abap_typedescr=>describe_by_name( lv_rollname ).
+      CATCH cx_root ##NO_TEXT.
+        CLEAR lo_descr.
+    ENDTRY.
+
+    IF lo_descr IS INITIAL
+       OR lo_descr->kind <> cl_abap_typedescr=>kind_elem
+       OR CAST cl_abap_elemdescr( lo_descr )->is_ddic_type( ) = abap_false.
+      es_finding-row        = 0.
+      es_finding-fieldname  = CONV fieldname( lv_rollname ).
+      es_finding-check_type = c_check-structure.
+      es_finding-message    = |{ lv_rollname } is not a DDIC data element|.
+      RETURN.
+    ENDIF.
+
+    " one-field anonymous structure, one row -> reuse validate( ) with a
+    " fresh instance so column filters and rules of the caller cannot
+    " interfere
+    DATA(lo_elem)   = CAST cl_abap_elemdescr( lo_descr ).
+    DATA(lo_struct) = cl_abap_structdescr=>create(
+                        VALUE #( ( name = 'VAL' type = lo_elem ) ) ).
+    DATA(lo_tab)    = cl_abap_tabledescr=>create( lo_struct ).
+
+    DATA: lr_tab TYPE REF TO data,
+          lr_row TYPE REF TO data.
+    CREATE DATA: lr_tab TYPE HANDLE lo_tab,
+                 lr_row TYPE HANDLE lo_struct.
+
+    FIELD-SYMBOLS: <lt_values> TYPE ANY TABLE,
+                   <ls_row>    TYPE any,
+                   <lv_val>    TYPE any.
+    ASSIGN: lr_tab->* TO <lt_values>,
+            lr_row->* TO <ls_row>.
+    ASSIGN COMPONENT 'VAL' OF STRUCTURE <ls_row> TO <lv_val>.
+    <lv_val> = iv_value.
+    INSERT <ls_row> INTO TABLE <lt_values>.
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( <lt_values> ).
+
+    IF lt_findings IS INITIAL.
+      rv_ok = abap_true.
+      RETURN.
+    ENDIF.
+
+    READ TABLE lt_findings INTO es_finding INDEX 1.
+    es_finding-row       = 1.
+    es_finding-fieldname = CONV fieldname( lv_rollname ).
   ENDMETHOD.
 
 

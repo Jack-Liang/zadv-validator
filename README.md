@@ -76,6 +76,31 @@ lo_validator->exclude_fields( VALUE #( ( 'REMARK' ) ) ).
 " 两个方法均整体替换各自列表；传空表 VALUE #( ) 重置
 ```
 
+## 单值校验
+
+不构造内表，直接校验一个值（静态方法，内部复用同一套 DDIC 校验逻辑）：
+
+```abap
+" 按数据元素
+IF zcl_adv_validator=>check_value_by_element(
+       iv_value    = lv_bukrs
+       iv_rollname = 'BUKRS' ) = abap_false.
+  " 非法：需要原因时接 es_finding
+ENDIF.
+
+" 或按表字段取 DDIC 定义（域/检查表/转换出口随该字段）
+DATA ls_finding TYPE zcl_adv_validator=>ty_finding.
+DATA(lv_ok) = zcl_adv_validator=>check_value_by_field(
+                  EXPORTING iv_value     = 'Z'
+                            iv_tabname   = 'DD07L'
+                            iv_fieldname = 'AS4LOCAL'
+                  IMPORTING es_finding   = ls_finding ).
+```
+
+- 值可按外部格式传入，转换出口在内部执行（如 ALPHA 自动补零）
+- 初始值视为合法（与整表校验口径一致，必填请用规则）
+- 元素/字段/表不存在 → 返回 `abap_false` 且 `es_finding-check_type = STRUCTURE`
+
 ## 返回结构 ty_finding
 
 | 字段 | 含义 |
@@ -131,7 +156,7 @@ CHANGELOG.md                             更新日志
 src/
   package.devc.xml                        包 ZADV_VALIDATOR
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，无接口依赖）
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（12 个用例）
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（17 个用例）
   zadv_demo.prog.abap                     演示报表
 ```
 
@@ -139,8 +164,9 @@ src/
 
 类 `ZCL_ADV_VALIDATOR` 自带 ABAP Unit（SE80 → 类 → 运行，或 ADT），
 覆盖：合法行零误报、非法日期/时间/域值、正则与必填规则、规则字段缺失、
-非结构化表拒绝、列过滤（only/exclude 及白名单字段名纠错）。检查表类用例
-依赖系统主数据，故在 demo 中演示而非单测。
+非结构化表拒绝、列过滤（only/exclude 及白名单字段名纠错）、单值校验
+（check_value_by_element/by_field）。检查表类用例依赖系统主数据，
+故在 demo 中演示而非单测。
 
 ## 路线图
 

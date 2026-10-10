@@ -51,8 +51,14 @@ START-OF-SELECTION.
     ( fieldname = 'REMARK' required = abap_true ) ) ).
 
   " restrict validation to specific columns (optional, example):
-  " lo_validator->only_fields( VALUE #( ( 'BUKRS' ) ( 'WAERS' ) ) ).
-  " lo_validator->exclude_fields( VALUE #( ( 'STATUS' ) ) ).
+  " backtick literals on purpose - 'C' literals do not fit the
+  " elementary string row type of the constructor
+  " lo_validator->only_fields( VALUE #( ( `BUKRS` ) ( `WAERS` ) ) ).
+  " lo_validator->exclude_fields( VALUE #( ( `STATUS` ) ) ).
+
+  " single value check without a table (static method):
+  " zcl_adv_validator=>check_value_by_element(
+  "     iv_value = '1000' iv_rollname = 'BUKRS' ).
 
   " example of an explicit check-table rule overriding DDIC:
   " ( fieldname = 'BUKRS' checktable = 'T001' checkfield = 'BUKRS' )

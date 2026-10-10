@@ -1,5 +1,12 @@
 # 更新日志
 
+## 未发布（v0.3 进行中）
+
+- 新增单值校验静态方法 `check_value_by_element` / `check_value_by_field`（复用 validate 全套 DDIC 校验，
+  返回真假 + finding 原因；初始值视为合法）
+- 修复：`ty_fieldnames` 行类型 fieldname → string（`VALUE #()` 字面量兼容性，上游反馈）
+
+
 ## v0.2（2026-10）
 
 - 新增列过滤 `only_fields` / `exclude_fields`（白名单优先、整体替换、白名单字段名纠错）
