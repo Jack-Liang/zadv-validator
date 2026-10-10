@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布（v0.3 进行中）
+## v0.3（2026-10）
 
 - 性能：检查表校验由"每个不同值一次 `SELECT COUNT(*)`"改为行循环前按
   检查表/字段分组收集去重内部格式值、每批 100 值 `WHERE field IN (...)`
@@ -20,6 +20,10 @@
 - 新增单值校验静态方法 `check_value_by_element` / `check_value_by_field`（复用 validate 全套 DDIC 校验，
   返回真假 + finding 原因；初始值视为合法）
 - 修复：`ty_fieldnames` 行类型 fieldname → string（`VALUE #()` 字面量兼容性，上游反馈）
+- 修复：abaplint `obsolete_statement` 关闭 `regex` 子项（`FIND REGEX` 为旧内核
+  兼容写法，见源码注释，`matches()` 在老 support package 不可用）
+- 修复：CI 工作流补传 `GITHUB_TOKEN` 并声明 `checks: write` 权限（新仓库默认
+  token 只读，Checks API 上报 403，0 issue 也判失败）
 
 
 ## v0.2（2026-10）
