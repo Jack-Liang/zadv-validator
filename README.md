@@ -138,17 +138,6 @@ DATA(lv_ok) = zcl_adv_validator=>check_value_by_field(
 - **不走 `DDUT_INPUT_CHECK`**：直接读 DD07L + 动态 SQL 可控性更好、可缓存、
   无 FM 签名依赖；需要其外键级语义时可替换 `check_table` 实现。
 
-## 常见问题（Troubleshooting）
-
-| 症状 | 原因与处理 |
-|---|---|
-| 激活报 `Type "ZIF_ADV_VALIDATOR" is unknown` | 早期版本依赖独立接口对象，导入不完整时会报此错。**已修复**：类型/常量/方法全部并入 `ZCL_ADV_VALIDATOR`，无接口依赖。pull 后若系统残留 `ZIF_ADV_VALIDATOR` 对象，abapGit 会自动删除，或 SE80 手工删除 |
-| 报 `The value "20261301" does not match type "D"` | ABAP 语法检查会静态校验赋给 D/T 类型字段的**字面量**，非法日期/时间写不成字面量。demo 与单测已改为运行期构造（先赋 string 变量再转 D/T）。自己写测试数据时同理 |
-| 报 `"T001" is not declared as a table ...` 或 `Unknown column name "SPRSL"` | 系统里这些定制表不可见（开发者版/试用版精简系统，或 ABAP Cloud）。demo 已改为无 SELECT 版本；若你的系统是 ABAP Cloud（BTP ES / 公有云），本库整体不适用——直接访问 DD07L/DD01L/TFDIR 和动态 SQL 均被云规范禁止 |
-| 类激活报 7.40 新语法错误（VALUE/COND/inline 声明等） | 本库要求 ABAP 7.40 SP08+（on-prem）。更低版本需整体降级语法 |
-| `VALUE #( ( 'X' ) )` 报 `C(4) 与行类型 C(30) 不兼容` | 元素性行类型（如 `TABLE OF fieldname`）的内表构造器要求字面量与行类型兼容，短文本字面量塞不进定长字符行。`ty_fieldnames` 行类型用 `string` 即为此规避，传入短字面量无需处理 |
-| abapGit pull 后仍有旧错误 | SE80 选中整个包 → 右键 *Activate*（或 abapGit 中 *Activate all*）整包激活，不要只激活单个对象 |
-
 ## 仓库结构
 
 ```
