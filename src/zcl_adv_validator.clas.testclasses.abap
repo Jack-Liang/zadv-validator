@@ -73,6 +73,9 @@ CLASS ltcl_validate DEFINITION FINAL
       interval_domain_values  FOR TESTING,
       bal_msg_mapping         FOR TESTING,
       bal_log_empty_findings  FOR TESTING,
+      db_rules_mapping        FOR TESTING,
+      db_rules_lenient        FOR TESTING,
+      row_offset              FOR TESTING,
 
       "! builds a standard table of the named DDIC structure at runtime;
       "! an unbound result means the type does not exist on this system
@@ -1227,6 +1230,124 @@ CLASS ltcl_validate IMPLEMENTATION.
                   it_findings = VALUE #( )
                   iv_object   = 'ZADV_UNIT_TEST' )
         msg = 'empty findings must not create a log' ).
+  ENDMETHOD.
+
+
+  METHOD db_rules_mapping.
+    " ZADV_RULES rows -> the three registration APIs: COLUMN/COMPARE
+    " take one row each, UNIQUE rows sharing a rule id form ONE rule
+    " (the alphabetically first field is the anchor), unknown rule
+    " types are skipped. White box on purpose: the mapping is pure and
+    " needs no database, add_rules_from_db only adds the SELECT
+    DATA lt_rows TYPE zcl_adv_validator=>ty_db_rules.
+    lt_rows = VALUE #(
+      ( scenario = 'T' rule_id = 'R1' rule_type = 'COLUMN'
+        fieldname = 'MAIL' regex = `^a+$` severity = 'W' )
+      ( scenario = 'T' rule_id = 'R2' rule_type = 'COLUMN'
+        fieldname = 'REMARK' required = 'X' )
+      ( scenario = 'T' rule_id = 'R3' rule_type = 'COMPARE'
+        fieldname = 'DATE_FROM' operator = 'LE' other_field = 'DATE_TO' )
+      ( scenario = 'T' rule_id = 'R4' rule_type = 'UNIQUE'
+        fieldname = 'STATUS' severity = 'W' )
+      ( scenario = 'T' rule_id = 'R4' rule_type = 'UNIQUE'
+        fieldname = 'MAIL' )
+      ( scenario = 'T' rule_id = 'R5' rule_type = 'SOMETHING'
+        fieldname = 'MAIL' ) ).
+
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+
+    DATA(lv_count) = lo_validator->apply_db_rules( lt_rows ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 4 act = lv_count
+        msg = 'two column, one compare, one unique rule expected' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lines( lo_validator->mt_rules )
+        msg = 'unknown rule type must be skipped' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lo_validator->mt_compare_rules ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lo_validator->mt_unique_rules ) ).
+
+    READ TABLE lo_validator->mt_unique_rules INDEX 1 INTO DATA(ls_unique).
+    cl_abap_unit_assert=>assert_subrc( ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'MAIL' act = CONV string( ls_unique-field )
+        msg = 'alphabetically first row of the group is the anchor' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lines( ls_unique-fields )
+        msg = 'both rows of the rule id contribute a key field' ).
+
+    " end to end: the mapped rules validate exactly like registered
+    " ones (regex W + rule id echo, required, violated comparison)
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows(
+      ( date_from = '20261010' date_to = '20261001' )
+      ( mail = 'b' remark = '' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 3 act = lines( lt_findings )
+        msg = 'compare violation + regex + required findings expected' ).
+
+    READ TABLE lt_findings INTO DATA(ls_regex)
+         WITH KEY check_type = zcl_adv_validator=>c_check-regex.
+    cl_abap_unit_assert=>assert_subrc( ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'W' act = CONV string( ls_regex-severity )
+        msg = 'severity from the customizing row must reach the finding' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'R1' act = CONV string( ls_regex-rule_id )
+        msg = 'rule id from the customizing row must be echoed' ).
+  ENDMETHOD.
+
+
+  METHOD db_rules_lenient.
+    " a missing customizing table and a scenario without rows load
+    " nothing: the SELECT raises internally, the catch keeps the rule
+    " set empty - never an exception, never a broken activation
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 0
+        act = lo_validator->add_rules_from_db(
+                  iv_scenario = 'X'
+                  iv_tabname  = 'ZADV_NO_SUCH_TABLE' )
+        msg = 'missing table must load zero rules without raising' ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 0
+        act = lo_validator->add_rules_from_db( iv_scenario = 'ZADV_NO_SCENARIO_9' )
+        msg = 'scenario without rows must load zero rules' ).
+  ENDMETHOD.
+
+
+  METHOD row_offset.
+    " iv_row_offset shifts finding row numbers: validate slices of a
+    " big table with the running offset to keep global row numbers,
+    " for column level and file level findings alike
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+
+    DATA(lt_findings) = lo_validator->validate(
+        it_data       = VALUE ty_rows( ( status = 'Z' ) )
+        iv_row_offset = 99 ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 100 act = lt_findings[ 1 ]-row
+        msg = 'offset 99 plus position 1' ).
+
+    lo_validator->add_unique_rule( VALUE #( field = 'STATUS' ) ).
+
+    DATA(lt_dup) = lo_validator->validate(
+        it_data       = VALUE ty_rows( ( status = 'A' ) ( status = 'A' ) )
+        iv_row_offset = 9 ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_dup )
+        msg = 'only the duplicate row is reported' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 11 act = lt_dup[ 1 ]-row
+        msg = 'uniqueness findings carry the offset too' ).
   ENDMETHOD.
 
 

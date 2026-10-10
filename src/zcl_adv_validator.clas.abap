@@ -122,9 +122,13 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       "! checks; string/numeric helper fields are simply skipped unless
       "! covered by a rule. Initial values pass all checks unless a rule
       "! marks them required. The method never raises: unusable
-      "! metadata is reported leniently.
+      "! metadata is reported leniently. iv_row_offset is added to the
+      "! row number of every finding: call it on slices of a big table
+      "! with the running offset to keep global row numbers (structural
+      "! findings stay row 0).
       validate
         IMPORTING it_data            TYPE ANY TABLE
+                  iv_row_offset      TYPE i OPTIONAL
         RETURNING VALUE(rt_findings) TYPE ty_findings,
 
       add_rule
@@ -175,6 +179,22 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
 
       "! discard all uniqueness rule registrations
       clear_unique_rules,
+
+      "! load validation rules of one scenario from the customizing
+      "! table ZADV_RULES (override the table name with iv_tabname) and
+      "! register them: RULE_TYPE COLUMN rows become column rules
+      "! (required/regex/checktable+checkfield/domname), COMPARE rows
+      "! become comparison rules (fieldname/operator/other_field),
+      "! UNIQUE rows sharing a RULE_ID form one uniqueness rule (one
+      "! row per key field, the alphabetically first is the anchor).
+      "! Returns the number of registered rules; 0 without raising when
+      "! the table does not exist or the scenario has no rows - the
+      "! dynamic SELECT never creates an activation order dependency
+      "! between the class and the table.
+      add_rules_from_db
+        IMPORTING iv_scenario       TYPE clike
+                  iv_tabname        TYPE clike OPTIONAL
+        RETURNING VALUE(rv_count)   TYPE i,
 
       "! Restrict validation to the given columns (initial = all columns).
       "! Rules on other columns are skipped as well. Unknown names are
@@ -349,6 +369,24 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       "! one BAL message per finding, see build_bal_msgs
       ty_bal_msgs TYPE STANDARD TABLE OF bal_s_msg WITH EMPTY KEY,
 
+      "! row of the ZADV_RULES customizing table (or any table with
+      "! the same columns), see add_rules_from_db
+      BEGIN OF ty_db_rule,
+        scenario    TYPE c LENGTH 30,
+        rule_id     TYPE c LENGTH 30,
+        rule_type   TYPE c LENGTH 10,
+        fieldname   TYPE fieldname,
+        operator    TYPE c LENGTH 2,
+        other_field TYPE fieldname,
+        required    TYPE flag,
+        severity    TYPE c LENGTH 1,
+        regex       TYPE c LENGTH 255,
+        checktable  TYPE tabname,
+        checkfield  TYPE fieldname,
+        domname     TYPE c LENGTH 30,
+      END OF ty_db_rule,
+      ty_db_rules TYPE STANDARD TABLE OF ty_db_rule WITH EMPTY KEY,
+
       "! duplicate detection: first row in which a key combination
       "! occurred (hashed lookup while the rows are scanned in order)
       BEGIN OF ty_dup_seen,
@@ -418,7 +456,17 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         unit  TYPE dfies-datatype VALUE 'UNIT',
         cuky  TYPE dfies-datatype VALUE 'CUKY',
         clnt  TYPE dfies-datatype VALUE 'CLNT',
-      END OF c_charlike.
+      END OF c_charlike,
+
+      "! customizing table read by add_rules_from_db
+      c_rulestab TYPE tabname VALUE 'ZADV_RULES',
+
+      "! RULE_TYPE values of the customizing table
+      BEGIN OF c_rule_type,
+        column  TYPE c LENGTH 10 VALUE 'COLUMN',
+        compare TYPE c LENGTH 10 VALUE 'COMPARE',
+        unique  TYPE c LENGTH 10 VALUE 'UNIQUE',
+      END OF c_rule_type.
 
     DATA:
       mt_rules          TYPE ty_rules,
@@ -575,10 +623,21 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
 
       "! duplicate findings of all uniqueness rules: rows are scanned
       "! in table order, the first occurrence of a combination passes,
-      "! every later one is reported
+      "! every later one is reported. iv_offset shifts the row numbers
+      "! (slice validation) and replaces sy-tabix, which stays 0 for
+      "! hashed tables
       unique_findings
         IMPORTING it_data            TYPE ANY TABLE
+                  iv_offset          TYPE i
         RETURNING VALUE(rt_findings) TYPE ty_findings,
+
+      "! map ZADV_RULES rows to the three registration APIs; rows with
+      "! an unknown RULE_TYPE are skipped. Pure mapping without DB
+      "! access, that is what the unit tests call. By value on purpose:
+      "! the mapping sorts the rows
+      apply_db_rules
+        IMPORTING VALUE(it_rules)  TYPE ty_db_rules
+        RETURNING VALUE(rv_count)  TYPE i,
 
       "! effective field combination of a uniqueness rule: the explicit
       "! fields list, or just the anchor field when no list was given;
@@ -779,6 +838,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     " ---------------------------------------------------------------------
     " 5) row loop
     " ---------------------------------------------------------------------
+    " manual counter on purpose: sy-tabix is not filled for hashed
+    " tables; the offset keeps global row numbers across slices
+    lv_row = iv_row_offset.
     LOOP AT it_data ASSIGNING <row>.
       lv_row = lv_row + 1.
       GET REFERENCE OF <row> INTO lr_row.
@@ -1009,7 +1071,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     " ---------------------------------------------------------------------
     " 6) file level duplicate rules (first occurrence passes)
     " ---------------------------------------------------------------------
-    APPEND LINES OF unique_findings( it_data ) TO rt_findings.
+    APPEND LINES OF unique_findings( it_data   = it_data
+                                     iv_offset = iv_row_offset )
+           TO rt_findings.
 
   ENDMETHOD.
 
@@ -1088,6 +1152,106 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
   METHOD clear_unique_rules.
     CLEAR mt_unique_rules.
+  ENDMETHOD.
+
+
+  METHOD add_rules_from_db.
+    DATA(lv_scenario) = to_upper( CONV string( iv_scenario ) ).
+    DATA(lv_tabname) = COND string( WHEN iv_tabname IS INITIAL
+                                    THEN CONV string( c_rulestab )
+                                    ELSE to_upper( CONV string( iv_tabname ) ) ).
+
+    DATA lt_rows TYPE ty_db_rules.
+
+    " dynamic FROM on purpose: the class must activate without the
+    " table object (no activation order dependency) and stay lenient on
+    " systems where it is missing - the SELECT raises, the catch keeps
+    " the rule set untouched
+    TRY.
+        SELECT scenario, rule_id, rule_type, fieldname,
+               operator, other_field, required, severity,
+               regex, checktable, checkfield, domname
+          FROM (lv_tabname)
+          WHERE scenario = @lv_scenario
+          INTO CORRESPONDING FIELDS OF TABLE @lt_rows.
+      CATCH cx_root ##NO_TEXT.
+        CLEAR lt_rows.
+    ENDTRY.
+
+    rv_count = apply_db_rules( lt_rows ).
+  ENDMETHOD.
+
+
+  METHOD apply_db_rules.
+
+    " stable order (BY on purpose, the table has an empty key): UNIQUE
+    " rows of one rule id become adjacent, the alphabetically first
+    " row of a group is the anchor
+    SORT it_rules BY rule_type ASCENDING
+                     rule_id ASCENDING
+                     fieldname ASCENDING.
+
+    LOOP AT it_rules ASSIGNING FIELD-SYMBOL(<ls_row>).
+      CASE <ls_row>-rule_type.
+        WHEN c_rule_type-column.
+          add_rule( VALUE #( fieldname  = <ls_row>-fieldname
+                             required   = xsdbool( <ls_row>-required = 'X' )
+                             regex      = <ls_row>-regex
+                             checktable = <ls_row>-checktable
+                             checkfield = <ls_row>-checkfield
+                             domname    = <ls_row>-domname
+                             severity   = <ls_row>-severity
+                             rule_id    = <ls_row>-rule_id ) ).
+          rv_count = rv_count + 1.
+
+        WHEN c_rule_type-compare.
+          add_compare_rule( VALUE #( field    = <ls_row>-fieldname
+                                     operator = <ls_row>-operator
+                                     other    = <ls_row>-other_field
+                                     severity = <ls_row>-severity
+                                     rule_id  = <ls_row>-rule_id ) ).
+          rv_count = rv_count + 1.
+
+        WHEN c_rule_type-unique.
+          " one row per key field, all rows of a rule id form ONE
+          " rule - handled in the grouped loop below
+          CONTINUE.
+
+        WHEN OTHERS.
+          CONTINUE.                " unknown rule type -> skip leniently
+      ENDCASE.
+    ENDLOOP.
+
+    " UNIQUE groups: rows sharing a rule id form ONE rule, every row
+    " contributes a key field; the sorted order makes the first row of
+    " the group the anchor. Explicit grouping on purpose: control level
+    " blocks (AT NEW/AT END OF) fill trailing components with '*' when
+    " read, a classic source of garbage anchors
+    DATA: lt_groups TYPE ty_unique_rules,
+          lv_cur_id TYPE c LENGTH 30.
+
+    CLEAR: lt_groups, lv_cur_id.
+    LOOP AT it_rules ASSIGNING FIELD-SYMBOL(<ls_urow>)
+         WHERE rule_type = c_rule_type-unique.
+
+      IF <ls_urow>-rule_id <> lv_cur_id.
+        DATA ls_unique TYPE ty_unique_rule.
+        CLEAR ls_unique.
+        ls_unique-rule_id  = <ls_urow>-rule_id.
+        ls_unique-severity = <ls_urow>-severity.
+        ls_unique-field    = <ls_urow>-fieldname.
+        lv_cur_id = <ls_urow>-rule_id.
+        APPEND ls_unique TO lt_groups ASSIGNING FIELD-SYMBOL(<ls_group>).
+      ENDIF.
+
+      INSERT <ls_urow>-fieldname INTO TABLE <ls_group>-fields.
+    ENDLOOP.
+
+    LOOP AT lt_groups INTO DATA(ls_group).
+      add_unique_rule( ls_group ).
+      rv_count = rv_count + 1.
+    ENDLOOP.
+
   ENDMETHOD.
 
 
@@ -2491,8 +2655,11 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                                         THEN <fs_ur>-field
                                         ELSE CONV fieldname( lt_fields[ 1 ] ) ).
 
+      " manual counter: sy-tabix stays 0 when it_data is hashed, the
+      " offset keeps global row numbers across slices
+      lv_row = iv_offset.
       LOOP AT it_data ASSIGNING FIELD-SYMBOL(<ls_urow>).
-        lv_row = sy-tabix.
+        lv_row = lv_row + 1.
 
         CLEAR: lv_key, lv_disp.
         lv_all_init = abap_true.

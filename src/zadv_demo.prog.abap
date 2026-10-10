@@ -201,6 +201,17 @@ START-OF-SELECTION.
   lo_validator->add_unique_rule( VALUE #( field   = 'REF_ID'
                                           rule_id = 'R_DUP_REF' ) ).
 
+  " v2.0: rules from the ZADV_RULES customizing table, maintained by
+  " consultants per scenario (SE16N/SM30), transported as customizing
+  " without code changes; zero rules simply means: no rows for the
+  " scenario on this system
+  DATA(lv_db_rules) = lo_validator->add_rules_from_db( iv_scenario = 'DEMO' ).
+  IF lv_db_rules = 0.
+    WRITE: / `ZADV_RULES: no rows for scenario DEMO on this system`.
+    WRITE: / `maintain them per scenario in SE16N and re-run`.
+    SKIP.
+  ENDIF.
+
   " register a custom column check (plugin) for EMAIL, see the local
   " class lcl_check_example_domain above
   lo_validator->add_column_check(
