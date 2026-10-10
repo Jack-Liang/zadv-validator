@@ -2,6 +2,10 @@
 
 ## 未发布（v2.0）
 
+- 修复（真机主类激活：类型不兼容）：apply_db_rules 里
+  `INSERT <fieldname> INTO TABLE <fields>`——哈希 string 行类型的 INSERT
+  要求源与行类型兼容，C(30) 的 DDIC 字段不行（MOVE/构造器才隐式转换），
+  补 `CONV string( ... )`
 - 修复（真机测试类激活：No component exists "REMARK"）：db_rules_mapping
   用例误用了 demo 的 ty_upload 字段名——测试类 ty_row 无 REMARK 组件；
   required 配置行与端到端数据改用 ty_row 现有的 DATE 字段（行 1 带合法

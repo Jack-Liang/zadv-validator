@@ -1244,7 +1244,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         APPEND ls_unique TO lt_groups ASSIGNING FIELD-SYMBOL(<ls_group>).
       ENDIF.
 
-      INSERT <ls_urow>-fieldname INTO TABLE <ls_group>-fields.
+      " CONV on purpose: INSERT INTO TABLE demands a source compatible
+      " with the string line type, C(30) of the db row is not
+      INSERT CONV string( <ls_urow>-fieldname ) INTO TABLE <ls_group>-fields.
     ENDLOOP.
 
     LOOP AT lt_groups INTO DATA(ls_group).
