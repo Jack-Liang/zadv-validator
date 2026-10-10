@@ -204,11 +204,12 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
 
       conv_exit_exists
         IMPORTING iv_convexit      TYPE convexit
-        RETURNING VALUE(rv_ok)     TYPE abap_bool,
+        RETURNING VALUE(rv_ok)     TYPE abap_bool.
 
-      "! shared core of check_value_by_element / check_value_by_field:
-      "! wraps the value into a one-field anonymous structure and reuses
-      "! validate( ) on a fresh validator instance
+    "! static on purpose: it is called via short form from the static
+    "! check_value_* methods (instance methods cannot be called that
+    "! way from a static context) and uses no instance state
+    CLASS-METHODS:
       check_single
         IMPORTING iv_value     TYPE clike
                   iv_rollname  TYPE clike
