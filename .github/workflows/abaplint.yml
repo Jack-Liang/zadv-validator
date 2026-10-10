@@ -13,3 +13,5 @@ jobs:
       - uses: abaplint/actions-abaplint@main
         with:
           configFile: abaplint.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
