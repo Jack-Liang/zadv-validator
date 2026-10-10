@@ -34,7 +34,11 @@ CLASS ltcl_validate DEFINITION FINAL
       checktable_rule_routes FOR TESTING,
       lenient_missing_ctab  FOR TESTING,
       cache_idempotent      FOR TESTING,
-      alpha_element_valid   FOR TESTING.
+      alpha_element_valid   FOR TESTING,
+      fkey_composite_valid     FOR TESTING,
+      fkey_composite_invalid   FOR TESTING,
+      fkey_partner_initial     FOR TESTING,
+      fkey_cache_idempotent    FOR TESTING.
 ENDCLASS.
 
 
@@ -383,6 +387,86 @@ CLASS ltcl_validate IMPLEMENTATION.
         act = zcl_adv_validator=>check_value_by_element(
                   iv_value = '123' iv_rollname = 'VBELN' )
         msg = 'external VBELN form should pass ALPHA' ).
+  ENDMETHOD.
+
+
+  METHOD fkey_composite_valid.
+    " KNA1-REGIO has the composite foreign key LAND1+REGIO -> T005A
+    " (LAND1+BLAND): the shipped combination DE/BY (Bavaria) must pass
+    " the combination check without any finding
+    DATA lt_rows TYPE STANDARD TABLE OF kna1 WITH EMPTY KEY.
+    APPEND VALUE #( land1 = 'DE' regio = 'BY' ) TO lt_rows.
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 0 act = lines( lt_findings )
+        msg = 'valid region combination reported' ).
+  ENDMETHOD.
+
+
+  METHOD fkey_composite_invalid.
+    " DE/ZZ does not exist in T005A: the combination must be rejected,
+    " and the DD05S mapping must show up as BLAND (not the same-name
+    " REGIO) together with the partner field LAND1
+    DATA lt_rows TYPE STANDARD TABLE OF kna1 WITH EMPTY KEY.
+    APPEND VALUE #( land1 = 'DE' regio = 'ZZ' ) TO lt_rows.
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'unknown region combination not detected' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-checktable )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'REGIO' act = CONV string( lt_findings[ 1 ]-fieldname ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = |T005A/BLAND+LAND1| act = CONV string( lt_findings[ 1 ]-object )
+        msg = 'DD05S must map REGIO to the check table field BLAND' ).
+  ENDMETHOD.
+
+
+  METHOD fkey_partner_initial.
+    " with an initial partner (LAND1 empty) the composite key cannot be
+    " evaluated: the lenient single field fallback applies, 'BY' exists
+    " as a region in T005A somewhere -> no finding
+    DATA lt_rows TYPE STANDARD TABLE OF kna1 WITH EMPTY KEY.
+    APPEND VALUE #( regio = 'BY' ) TO lt_rows.
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 0 act = lines( lt_findings )
+        msg = 'initial partner must degrade to the lenient single check' ).
+  ENDMETHOD.
+
+
+  METHOD fkey_cache_idempotent.
+    " repeated validate( ) (tuple cache hits) and a run after
+    " clear_caches( ) (fresh lookups) must return identical findings
+    DATA lt_rows TYPE STANDARD TABLE OF kna1 WITH EMPTY KEY.
+    APPEND VALUE #( land1 = 'DE' regio = 'ZZ' ) TO lt_rows.
+    APPEND VALUE #( land1 = 'DE' regio = 'ZZ' ) TO lt_rows.
+
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+
+    DATA(lt_first)  = lo_validator->validate( lt_rows ).
+    DATA(lt_second) = lo_validator->validate( lt_rows ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lines( lt_first )
+        msg = 'both rows must be reported' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = lines( lt_first ) act = lines( lt_second )
+        msg = 'second validate must return identical findings' ).
+
+    lo_validator->clear_caches( ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = lines( lt_first ) act = lines( lo_validator->validate( lt_rows ) )
+        msg = 'validate after clear_caches must return identical findings' ).
   ENDMETHOD.
 
 ENDCLASS.

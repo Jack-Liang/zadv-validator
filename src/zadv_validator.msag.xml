@@ -92,6 +92,12 @@
      <MSGNR>014</MSGNR>
      <TEXT>Field &amp;1 of &amp;2 has no data element</TEXT>
     </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>015</MSGNR>
+     <TEXT>Value '&amp;1' does not exist in check table &amp;2 (key &amp;3)</TEXT>
+    </T100>
    </T100>
   </asx:values>
  </asx:abap>

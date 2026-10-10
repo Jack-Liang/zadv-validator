@@ -118,6 +118,31 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       ty_msgid TYPE c LENGTH 20,
       ty_msgnr TYPE n LENGTH 3,
 
+      "! DD05S foreign key mapping: one field of the validated structure
+      "! to the check table field it refers to
+      BEGIN OF ty_fkmap,
+        fieldname TYPE fieldname,
+        fortable  TYPE tabname,
+        forkey    TYPE fieldname,
+      END OF ty_fkmap,
+      ty_fkmaps TYPE SORTED TABLE OF ty_fkmap
+                  WITH NON-UNIQUE KEY fieldname fortable,
+
+      BEGIN OF ty_struct_fk,
+        tabname TYPE tabname,
+        maps    TYPE ty_fkmaps,
+      END OF ty_struct_fk,
+      ty_struct_fks TYPE HASHED TABLE OF ty_struct_fk WITH UNIQUE KEY tabname,
+
+      "! partner field of a composite foreign key: another field of the
+      "! validated structure and the check table field it maps to
+      BEGIN OF ty_fk_partner,
+        fieldname  TYPE fieldname,
+        checkfield TYPE fieldname,
+      END OF ty_fk_partner,
+      ty_fk_partners TYPE SORTED TABLE OF ty_fk_partner
+                       WITH UNIQUE KEY fieldname,
+
       BEGIN OF ty_field,
         fieldname    TYPE fieldname,
         synthetic    TYPE abap_bool,
@@ -130,6 +155,8 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         rule_ctab    TYPE dfies-checktable,
         rule_cfield  TYPE fieldname,
         rule_domname TYPE dfies-domname,
+        fkey_checkfield TYPE fieldname,
+        fkey_partners   TYPE ty_fk_partners,
       END OF ty_field,
       ty_fields TYPE SORTED TABLE OF ty_field WITH UNIQUE KEY fieldname,
 
@@ -178,7 +205,30 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       "! C -> string strips trailing blanks so found values compare
       "! cleanly with the searched internal-format values
       ty_ctab_val  TYPE c LENGTH 1333,
-      ty_ctab_vals TYPE STANDARD TABLE OF ty_ctab_val WITH EMPTY KEY.
+      ty_ctab_vals TYPE STANDARD TABLE OF ty_ctab_val WITH EMPTY KEY,
+
+      "! hit cache for composite foreign key lookups: keysig is the '+'
+      "! joined list of check table field names, tuple the tab separated
+      "! internal-format values in the same order
+      BEGIN OF ty_ckey_hit,
+        tabname TYPE tabname,
+        keysig  TYPE string,
+        tuple   TYPE string,
+        found   TYPE abap_bool,
+      END OF ty_ckey_hit,
+      ty_ckey_hits TYPE HASHED TABLE OF ty_ckey_hit
+                     WITH UNIQUE KEY tabname keysig tuple,
+
+      ty_ckey_fields TYPE STANDARD TABLE OF fieldname WITH EMPTY KEY,
+
+      BEGIN OF ty_ckey_group,
+        tabname TYPE tabname,
+        keysig  TYPE string,
+        fields  TYPE ty_ckey_fields,
+        tuples  TYPE ty_value_set,
+      END OF ty_ckey_group,
+      ty_ckey_groups TYPE SORTED TABLE OF ty_ckey_group
+                       WITH UNIQUE KEY tabname keysig.
 
     CONSTANTS:
       "! SE91 message class carrying the finding texts (SE63 translatable)
@@ -193,12 +243,51 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       mt_exclude_fields TYPE ty_fieldnames,
       mt_domains        TYPE ty_domains,
       mt_ctab_hits      TYPE ty_ctab_hits,
+      mt_ckey_hits      TYPE ty_ckey_hits,
+      mt_struct_fks     TYPE ty_struct_fks,
       mt_convexits      TYPE ty_convexits.
 
     METHODS:
       build_fields
         IMPORTING io_struct        TYPE REF TO cl_abap_structdescr
         RETURNING VALUE(rt_fields) TYPE ty_fields,
+
+      "! resolve the DD05S foreign key mapping for every DDIC derived
+      "! check table field of the (already column filtered) field list:
+      "! the real check table field name and the partner fields of
+      "! composite foreign keys. Purely additive: without a mapping row
+      "! the same-name behaviour stays in effect. Called after the column
+      "! filters on purpose: partners dropped by a filter degrade the
+      "! composite check to the single field check.
+      resolve_foreign_keys
+        IMPORTING iv_structname TYPE tabname
+        CHANGING  ct_fields     TYPE ty_fields,
+
+      "! DD05S mapping rows of one structure, one SELECT per structure
+      get_struct_fks
+        IMPORTING iv_tabname   TYPE tabname
+        RETURNING VALUE(rs_fk) TYPE ty_struct_fk,
+
+      "! ordered check table field list of a composite foreign key:
+      "! own check field first, then the partners (sorted by field name)
+      ckey_fields
+        IMPORTING is_field        TYPE ty_field
+        RETURNING VALUE(rt_fields) TYPE ty_ckey_fields,
+
+      ckey_keysig
+        IMPORTING is_field      TYPE ty_field
+        RETURNING VALUE(rv_sig) TYPE string,
+
+      "! tuple of a composite key for one data row: own internal-format
+      "! value first, then the partner values. ev_complete = abap_false
+      "! when a partner component is missing or initial
+      build_fkey_tuple
+        IMPORTING is_field     TYPE ty_field
+                  it_fields    TYPE ty_fields
+                  iv_struct    TYPE any
+                  iv_value     TYPE string
+        EXPORTING ev_tuple     TYPE string
+                  ev_complete  TYPE abap_bool,
 
       get_domain
         IMPORTING iv_domname       TYPE ty_domname
@@ -236,6 +325,28 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         IMPORTING iv_table  TYPE tabname
                   iv_field  TYPE fieldname
                   it_values TYPE ty_value_set,
+
+      "! collect the distinct composite key tuples of all rows and fill
+      "! the tuple cache with chunked OR-of-ANDs selects; rows with an
+      "! incomplete tuple (initial partner) feed the single column batch
+      "! prefetch instead
+      prefetch_foreign_keys
+        IMPORTING it_data   TYPE ANY TABLE
+                  it_fields TYPE ty_fields,
+
+      prefetch_ckey_group
+        IMPORTING iv_table  TYPE tabname
+                  iv_keysig TYPE string
+                  it_fields TYPE ty_ckey_fields
+                  it_tuples TYPE ty_value_set,
+
+      "! cached existence check of one composite key tuple; on dynamic
+      "! SQL errors the lenient hit is cached like check_table does
+      check_foreign_key
+        IMPORTING iv_table  TYPE tabname
+                  iv_keysig TYPE string
+                  iv_tuple  TYPE string
+        RETURNING VALUE(rv_ok) TYPE abap_bool,
 
       check_date
         IMPORTING iv_date          TYPE string
@@ -341,6 +452,13 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     ENDIF.
 
     " ---------------------------------------------------------------------
+    " 3.5) DD05S foreign key mapping for the DDIC derived check tables
+    " ---------------------------------------------------------------------
+    resolve_foreign_keys(
+      EXPORTING iv_structname = CONV #( lo_struct->get_relative_name( ) )
+      CHANGING  ct_fields     = lt_fields ).
+
+    " ---------------------------------------------------------------------
     " 3) rules referencing fields that do not exist -> structural findings
     " ---------------------------------------------------------------------
     CREATE DATA lr_line TYPE HANDLE lo_struct.
@@ -361,6 +479,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     " 4) prefill the check-table lookup cache in chunked batches
     " ---------------------------------------------------------------------
     prefetch_checktables( it_data = it_data it_fields = lt_fields ).
+    prefetch_foreign_keys( it_data = it_data it_fields = lt_fields ).
 
     " ---------------------------------------------------------------------
     " 5) row loop
@@ -460,9 +579,54 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                                 ELSE <fs_field>-checktable ).
         DATA(lv_cfld) = COND #( WHEN <fs_field>-rule_cfield IS NOT INITIAL
                                 THEN <fs_field>-rule_cfield
+                                WHEN <fs_field>-fkey_checkfield IS NOT INITIAL
+                                THEN <fs_field>-fkey_checkfield
                                 ELSE <fs_field>-fieldname ).
 
+        DATA: lv_keysig   TYPE string,
+              lv_tuple    TYPE string,
+              lv_complete TYPE abap_bool,
+              lv_composed TYPE abap_bool.
+
+        CLEAR: lv_tuple, lv_complete, lv_composed.
+
         IF lv_ctab IS NOT INITIAL AND
+           <fs_field>-fkey_partners IS NOT INITIAL.
+
+          " composite DDIC foreign key: validate the value combination;
+          " an incomplete tuple (initial partner) degrades to the single
+          " field check below
+          build_fkey_tuple( EXPORTING is_field = <fs_field>
+                                      it_fields = lt_fields
+                                      iv_struct = <row>
+                                      iv_value  = lv_int
+                            IMPORTING ev_tuple    = lv_tuple
+                                      ev_complete = lv_complete ).
+
+          IF lv_complete = abap_true.
+            lv_keysig = ckey_keysig( <fs_field> ).
+
+            IF check_foreign_key( iv_table  = lv_ctab
+                                  iv_keysig = lv_keysig
+                                  iv_tuple  = lv_tuple ) = abap_false.
+              APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
+                              value = lv_disp object = |{ lv_ctab }/{ lv_keysig }|
+                              check_type = c_check-checktable
+                              message = build_msg( iv_nr = '015'
+                                                   iv_a  = lv_disp
+                                                   iv_b  = lv_ctab
+                                                   iv_c  = lv_keysig ) )
+                     TO rt_findings.
+              CONTINUE.
+            ENDIF.
+
+            " composite check passed -> the single field check is skipped
+            lv_composed = abap_true.
+          ENDIF.
+
+        ENDIF.
+
+        IF lv_ctab IS NOT INITIAL AND lv_composed = abap_false AND
            check_table( iv_table = lv_ctab iv_field = lv_cfld iv_value = lv_int ) = abap_false.
           APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                           value = lv_disp object = |{ lv_ctab }/{ lv_cfld }|
@@ -532,7 +696,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
 
   METHOD clear_caches.
-    CLEAR: mt_domains, mt_ctab_hits, mt_convexits.
+    CLEAR: mt_domains, mt_ctab_hits, mt_ckey_hits, mt_struct_fks, mt_convexits.
   ENDMETHOD.
 
 
@@ -757,6 +921,122 @@ CLASS zcl_adv_validator IMPLEMENTATION.
   ENDMETHOD.
 
 
+  METHOD resolve_foreign_keys.
+    CHECK iv_structname IS NOT INITIAL.
+
+    DATA(ls_fk) = get_struct_fks( iv_tabname = iv_structname ).
+
+    LOOP AT ct_fields ASSIGNING FIELD-SYMBOL(<fs_fk>)
+         WHERE checktable IS NOT INITIAL AND rule_ctab IS INITIAL.
+
+      " own mapping row: field of the structure -> field of the check
+      " table; without a row the same-name behaviour stays in effect
+      READ TABLE ls_fk-maps INTO DATA(ls_map)
+           WITH KEY fieldname = <fs_fk>-fieldname
+                    fortable  = <fs_fk>-checktable.
+      IF sy-subrc = 0.
+        <fs_fk>-fkey_checkfield = ls_map-forkey.
+      ENDIF.
+
+      " partners of the composite foreign key: the other fields of the
+      " same relationship whose components survived the column filters
+      LOOP AT ls_fk-maps INTO DATA(ls_pmap)
+           WHERE fortable = <fs_fk>-checktable.
+        IF ls_pmap-fieldname = <fs_fk>-fieldname.
+          CONTINUE.
+        ENDIF.
+        " the client assignment is part of the relationship but uploads
+        " never carry the client -> it would permanently degrade the
+        " composite check to the single field fallback
+        IF ls_pmap-fieldname = 'MANDT' OR ls_pmap-forkey = 'MANDT'.
+          CONTINUE.
+        ENDIF.
+        READ TABLE ct_fields TRANSPORTING NO FIELDS
+             WITH TABLE KEY fieldname = ls_pmap-fieldname.
+        IF sy-subrc <> 0.
+          CONTINUE.
+        ENDIF.
+        " a check table field must only appear once in the key: skip
+        " partners of a second relationship to the same check table
+        READ TABLE <fs_fk>-fkey_partners TRANSPORTING NO FIELDS
+             WITH KEY checkfield = ls_pmap-forkey.
+        IF sy-subrc = 0 OR ls_pmap-forkey = <fs_fk>-fkey_checkfield.
+          CONTINUE.
+        ENDIF.
+        INSERT VALUE #( fieldname  = ls_pmap-fieldname
+                        checkfield = ls_pmap-forkey )
+               INTO TABLE <fs_fk>-fkey_partners.
+      ENDLOOP.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD get_struct_fks.
+    READ TABLE mt_struct_fks INTO rs_fk WITH TABLE KEY tabname = iv_tabname.
+    IF sy-subrc = 0.
+      RETURN.
+    ENDIF.
+
+    rs_fk-tabname = iv_tabname.
+
+    SELECT fieldname, fortable, forkey FROM dd05s
+      WHERE tabname = @iv_tabname
+      INTO CORRESPONDING FIELDS OF TABLE @rs_fk-maps.
+
+    INSERT rs_fk INTO TABLE mt_struct_fks.
+  ENDMETHOD.
+
+
+  METHOD ckey_fields.
+    APPEND COND fieldname( WHEN is_field-fkey_checkfield IS NOT INITIAL
+                           THEN is_field-fkey_checkfield
+                           ELSE is_field-fieldname )
+           TO rt_fields.
+    LOOP AT is_field-fkey_partners ASSIGNING FIELD-SYMBOL(<fs_cf>).
+      APPEND <fs_cf>-checkfield TO rt_fields.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD ckey_keysig.
+    LOOP AT ckey_fields( is_field ) INTO DATA(lv_f).
+      IF rv_sig IS NOT INITIAL.
+        rv_sig = rv_sig && '+'.
+      ENDIF.
+      rv_sig = rv_sig && lv_f.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD build_fkey_tuple.
+    ev_complete = abap_true.
+    ev_tuple    = iv_value.
+
+    LOOP AT is_field-fkey_partners ASSIGNING FIELD-SYMBOL(<fs_bp>).
+
+      ASSIGN COMPONENT <fs_bp>-fieldname OF STRUCTURE iv_struct
+             TO FIELD-SYMBOL(<lv_bp>).
+      IF sy-subrc <> 0 OR <lv_bp> IS INITIAL.
+        ev_complete = abap_false.
+        CLEAR ev_tuple.
+        RETURN.
+      ENDIF.
+
+      READ TABLE it_fields ASSIGNING FIELD-SYMBOL(<fs_bmeta>)
+           WITH TABLE KEY fieldname = <fs_bp>-fieldname.
+      IF sy-subrc <> 0.
+        ev_complete = abap_false.
+        CLEAR ev_tuple.
+        RETURN.
+      ENDIF.
+
+      ev_tuple = ev_tuple && cl_abap_char_utilities=>horizontal_tab
+              && internal_value( is_field = <fs_bmeta>
+                                 iv_disp  = CONV string( <lv_bp> ) ).
+    ENDLOOP.
+  ENDMETHOD.
+
+
   METHOD internal_value.
     " conversion exit first, then case folding: character values are
     " compared case-insensitively (upper) unless the effective domain
@@ -860,11 +1140,68 @@ CLASS zcl_adv_validator IMPLEMENTATION.
   ENDMETHOD.
 
 
+  METHOD check_foreign_key.
+    READ TABLE mt_ckey_hits INTO DATA(ls_hit)
+         WITH TABLE KEY tabname = iv_table
+                        keysig  = iv_keysig
+                        tuple   = iv_tuple.
+    IF sy-subrc = 0.
+      rv_ok = ls_hit-found.
+      RETURN.
+    ENDIF.
+
+    " lenient default: unreadable check-table metadata never blocks data
+    rv_ok = abap_true.
+
+    DATA: lt_fields TYPE ty_ckey_fields,
+          lt_values TYPE ty_values,
+          lv_where  TYPE string.
+
+    SPLIT iv_keysig AT '+' INTO TABLE lt_fields.
+    SPLIT iv_tuple  AT cl_abap_char_utilities=>horizontal_tab INTO TABLE lt_values.
+
+    IF lines( lt_fields ) <> lines( lt_values ) OR lt_fields IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    TRY.
+        LOOP AT lt_fields ASSIGNING FIELD-SYMBOL(<fs_kf>).
+          READ TABLE lt_values INTO DATA(lv_val) INDEX sy-tabix.
+          IF lv_where IS NOT INITIAL.
+            lv_where = lv_where && ' AND '.
+          ENDIF.
+          lv_where = lv_where
+                  && |{ <fs_kf> } = '|
+                  && replace( val = lv_val sub = `'` with = `''` occ = 0 )
+                  && |'|.
+        ENDLOOP.
+
+        " fully classic Open SQL on purpose, see check_table
+        DATA lv_cnt TYPE i.
+
+        SELECT COUNT(*) FROM (iv_table)
+          INTO lv_cnt
+          WHERE (lv_where).
+
+        rv_ok = xsdbool( lv_cnt > 0 ).
+
+      CATCH cx_sy_dynamic_osql_error ##NO_TEXT.
+        " generated/view-only check tables etc. -> keep lenient default
+    ENDTRY.
+
+    INSERT VALUE #( tabname = iv_table keysig = iv_keysig tuple = iv_tuple
+                    found   = rv_ok ) INTO TABLE mt_ckey_hits.
+  ENDMETHOD.
+
+
   METHOD prefetch_checktables.
 
     DATA lt_wants TYPE ty_ctab_wants.
 
     LOOP AT it_fields ASSIGNING FIELD-SYMBOL(<fs_pfield>).
+
+      " composite foreign keys are prefetched by prefetch_foreign_keys
+      CHECK <fs_pfield>-fkey_partners IS INITIAL.
 
       DATA(lv_ctab) = COND #( WHEN <fs_pfield>-rule_ctab IS NOT INITIAL
                               THEN <fs_pfield>-rule_ctab
@@ -872,6 +1209,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       CHECK lv_ctab IS NOT INITIAL.
       DATA(lv_cfld) = COND #( WHEN <fs_pfield>-rule_cfield IS NOT INITIAL
                               THEN <fs_pfield>-rule_cfield
+                              WHEN <fs_pfield>-fkey_checkfield IS NOT INITIAL
+                              THEN <fs_pfield>-fkey_checkfield
                               ELSE <fs_pfield>-fieldname ).
 
       LOOP AT it_data ASSIGNING FIELD-SYMBOL(<fs_prow>).
@@ -965,6 +1304,210 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         CATCH cx_sy_dynamic_osql_error.
           " unreadable check table (generated, view only, ...): cache
           " nothing here, the per-value fallback in the row loop keeps
+          " the lenient behaviour
+          RETURN.
+      ENDTRY.
+
+      lv_off = lv_end.
+    ENDWHILE.
+  ENDMETHOD.
+
+
+  METHOD prefetch_foreign_keys.
+
+    DATA: lt_groups TYPE ty_ckey_groups,
+          lt_single TYPE ty_ctab_wants.
+
+    LOOP AT it_fields ASSIGNING FIELD-SYMBOL(<fs_ffield>)
+         WHERE checktable IS NOT INITIAL AND rule_ctab IS INITIAL.
+
+      CHECK <fs_ffield>-fkey_partners IS NOT INITIAL.
+
+      DATA(lv_ctab)   = <fs_ffield>-checktable.
+      DATA(lv_keysig) = ckey_keysig( <fs_ffield> ).
+      DATA(lt_cflds)  = ckey_fields( <fs_ffield> ).
+
+      LOOP AT it_data ASSIGNING FIELD-SYMBOL(<fs_frow>).
+
+        ASSIGN COMPONENT <fs_ffield>-fieldname OF STRUCTURE <fs_frow>
+               TO FIELD-SYMBOL(<fs_fval>).
+        IF sy-subrc <> 0 OR <fs_fval> IS INITIAL.
+          CONTINUE.
+        ENDIF.
+
+        DATA(lv_int) = internal_value( is_field = <fs_ffield>
+                                       iv_disp  = CONV string( <fs_fval> ) ).
+
+        build_fkey_tuple( EXPORTING is_field = <fs_ffield>
+                                    it_fields = it_fields
+                                    iv_struct = <fs_frow>
+                                    iv_value  = lv_int
+                          IMPORTING ev_tuple    = DATA(lv_tuple)
+                                    ev_complete = DATA(lv_complete) ).
+
+        IF lv_complete = abap_true.
+
+          READ TABLE mt_ckey_hits TRANSPORTING NO FIELDS
+               WITH TABLE KEY tabname = lv_ctab
+                              keysig  = lv_keysig
+                              tuple   = lv_tuple.
+          IF sy-subrc = 0.
+            CONTINUE.
+          ENDIF.
+
+          READ TABLE lt_groups ASSIGNING FIELD-SYMBOL(<fs_fgrp>)
+               WITH TABLE KEY tabname = lv_ctab keysig = lv_keysig.
+          IF sy-subrc <> 0.
+            INSERT VALUE #( tabname = lv_ctab keysig = lv_keysig
+                            fields  = lt_cflds )
+                   INTO TABLE lt_groups ASSIGNING <fs_fgrp>.
+          ENDIF.
+          INSERT lv_tuple INTO TABLE <fs_fgrp>-tuples.
+
+        ELSE.
+
+          " sparse row: the single field fallback of the row loop will
+          " consult the single column cache -> prefetch the own value
+          DATA(lv_sfld) = COND fieldname(
+                            WHEN <fs_ffield>-fkey_checkfield IS NOT INITIAL
+                            THEN <fs_ffield>-fkey_checkfield
+                            ELSE <fs_ffield>-fieldname ).
+
+          READ TABLE mt_ctab_hits TRANSPORTING NO FIELDS
+               WITH TABLE KEY tabname = lv_ctab
+                              field   = lv_sfld
+                              value   = lv_int.
+          IF sy-subrc = 0.
+            CONTINUE.
+          ENDIF.
+
+          READ TABLE lt_single ASSIGNING FIELD-SYMBOL(<fs_swant>)
+               WITH TABLE KEY tabname = lv_ctab field = lv_sfld.
+          IF sy-subrc <> 0.
+            INSERT VALUE #( tabname = lv_ctab field = lv_sfld )
+                   INTO TABLE lt_single ASSIGNING <fs_swant>.
+          ENDIF.
+          INSERT lv_int INTO TABLE <fs_swant>-values.
+
+        ENDIF.
+      ENDLOOP.
+    ENDLOOP.
+
+    LOOP AT lt_groups ASSIGNING <fs_fgrp>.
+      prefetch_ckey_group( iv_table  = <fs_fgrp>-tabname
+                           iv_keysig = <fs_fgrp>-keysig
+                           it_fields = <fs_fgrp>-fields
+                           it_tuples = <fs_fgrp>-tuples ).
+    ENDLOOP.
+
+    LOOP AT lt_single ASSIGNING FIELD-SYMBOL(<fs_sgrp>).
+      prefetch_ctab_group( iv_table  = <fs_sgrp>-tabname
+                           iv_field  = <fs_sgrp>-field
+                           it_values = <fs_sgrp>-values ).
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD prefetch_ckey_group.
+
+    DATA: lt_tuples TYPE ty_values,
+          lt_parts  TYPE ty_values,
+          lt_found  TYPE ty_value_set,
+          lv_off    TYPE i,
+          lv_from   TYPE i,
+          lv_end    TYPE i,
+          lv_where  TYPE string,
+          lv_cond   TYPE string,
+          lv_cols   TYPE string,
+          lv_ftuple TYPE string,
+          lr_found  TYPE REF TO data.
+
+    DATA(lv_tabs) = cl_abap_char_utilities=>horizontal_tab.
+
+    " dynamic target: one character column per key field; C -> string
+    " strips trailing blanks so found tuples compare cleanly with the
+    " searched internal-format tuples
+    TRY.
+        DATA(lt_comps) = VALUE abap_componentdescr_tab(
+                          FOR lv_f IN it_fields
+                          ( name = lv_f
+                            type = cl_abap_elemdescr=>get_c( 1333 ) ) ).
+        DATA(lo_str) = cl_abap_structdescr=>create( lt_comps ).
+        DATA(lo_tab) = cl_abap_tabledescr=>create( lo_str ).
+      CATCH cx_root ##NO_TEXT.
+        RETURN.                            " pathological field names
+    ENDTRY.
+
+    CREATE DATA lr_found TYPE HANDLE lo_tab.
+    ASSIGN lr_found->* TO FIELD-SYMBOL(<lt_found>).
+
+    LOOP AT it_fields INTO DATA(lv_col).
+      IF lv_cols IS NOT INITIAL.
+        lv_cols = lv_cols && ','.
+      ENDIF.
+      lv_cols = lv_cols && lv_col.
+    ENDLOOP.
+
+    lt_tuples = VALUE ty_values( ( LINES OF it_tuples ) ).
+
+    WHILE lv_off < lines( lt_tuples ).
+
+      lv_from = lv_off + 1.
+      lv_end  = nmin( val1 = lv_off + c_in_chunk
+                      val2 = lines( lt_tuples ) ).
+
+      CLEAR lv_where.
+      LOOP AT lt_tuples FROM lv_from TO lv_end INTO DATA(lv_tuple).
+        SPLIT lv_tuple AT lv_tabs INTO TABLE lt_parts.
+        CLEAR lv_cond.
+        LOOP AT it_fields ASSIGNING FIELD-SYMBOL(<fs_pf>).
+          READ TABLE lt_parts INTO DATA(lv_pv) INDEX sy-tabix.
+          IF lv_cond IS NOT INITIAL.
+            lv_cond = lv_cond && ' AND '.
+          ENDIF.
+          lv_cond = lv_cond && |{ <fs_pf> } = '|
+                  && replace( val = lv_pv sub = `'` with = `''` occ = 0 )
+                  && |'|.
+        ENDLOOP.
+        IF lv_where IS NOT INITIAL.
+          lv_where = lv_where && ' OR '.
+        ENDIF.
+        lv_where = lv_where && |( { lv_cond } )|.
+      ENDLOOP.
+
+      TRY.
+          CLEAR lt_found.
+
+          " fully classic Open SQL on purpose, see check_table
+          SELECT DISTINCT (lv_cols) FROM (iv_table)
+            INTO TABLE <lt_found>
+            WHERE (lv_where).
+
+          LOOP AT <lt_found> ASSIGNING FIELD-SYMBOL(<ls_found>).
+            CLEAR lv_ftuple.
+            LOOP AT it_fields ASSIGNING <fs_pf>.
+              ASSIGN COMPONENT sy-tabix OF STRUCTURE <ls_found>
+                     TO FIELD-SYMBOL(<lv_fv>).
+              IF lv_ftuple IS NOT INITIAL.
+                lv_ftuple = lv_ftuple && lv_tabs.
+              ENDIF.
+              lv_ftuple = lv_ftuple && CONV string( <lv_fv> ).
+            ENDLOOP.
+            INSERT lv_ftuple INTO TABLE lt_found.
+          ENDLOOP.
+
+          LOOP AT lt_tuples FROM lv_from TO lv_end INTO lv_tuple.
+            INSERT VALUE #( tabname = iv_table
+                            keysig  = iv_keysig
+                            tuple   = lv_tuple
+                            found   = xsdbool( line_exists(
+                                        lt_found[ table_line = lv_tuple ] ) ) )
+                   INTO TABLE mt_ckey_hits.
+          ENDLOOP.
+
+        CATCH cx_sy_dynamic_osql_error.
+          " unreadable check table (generated, view only, ...): cache
+          " nothing here, the per tuple fallback in the row loop keeps
           " the lenient behaviour
           RETURN.
       ENDTRY.
