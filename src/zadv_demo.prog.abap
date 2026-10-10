@@ -4,15 +4,18 @@ REPORT zadv_demo.
 "* against DDIC domain fixed values, check tables and format rules,
 "* then shows every invalid input in an ALV.
 "*
-"* Row 1 is built from values that are valid in the current system,
-"* rows 2 and 3 contain deliberate errors.
+"* The demo deliberately avoids SELECTs on customizing tables so it
+"* activates on every system (trial/developer editions often lack T001
+"* etc.). Check-table findings appear only where the check table is
+"* actually present; on systems without it the lenient mode lets the
+"* value pass instead of raising an error.
 
 TYPES: BEGIN OF ty_upload,
+         xflag  TYPE xfeld,     " domain XFELD: fixed values X / space
+         budat  TYPE budat,     " DATS format check
          bukrs  TYPE bukrs,     " check table T001
          land1  TYPE land1,     " check table T005
          waers  TYPE waers,     " check table TCURC
-         spras  TYPE spras,     " check table T002
-         budat  TYPE budat,     " DATS format check
          email  TYPE string,    " non DDIC field -> regex rule
          remark TYPE string,    " non DDIC field -> required rule
        END OF ty_upload.
@@ -22,21 +25,19 @@ DATA gt_upload TYPE STANDARD TABLE OF ty_upload WITH EMPTY KEY.
 
 START-OF-SELECTION.
 
-  " pick values that are valid in THIS system so row 1 stays clean
-  SELECT SINGLE bukrs FROM t001  INTO @DATA(lv_bukrs).
-  SELECT SINGLE land1 FROM t005  INTO @DATA(lv_land1).
-  SELECT SINGLE waers FROM tcurc INTO @DATA(lv_waers).
-  SELECT SINGLE sprsl FROM t002  INTO @DATA(lv_spras).
-
   gt_upload = VALUE #(
-    ( bukrs = lv_bukrs land1 = lv_land1 waers = lv_waers spras = lv_spras
-      budat = sy-datum email = 'dev@example.com' remark = 'perfect row' )
+    " row 1: values that are valid on most systems
+    ( xflag = 'X' budat = sy-datum bukrs = '1000' land1 = 'DE'
+      waers = 'EUR' email = 'dev@example.com' remark = 'typical valid row' )
 
-    ( bukrs = 'ZZZZ' land1 = 'ZZ' waers = 'ZZZ' spras = 'Q'
-      budat = '20261301' email = 'not-an-email' remark = '' )
+    " row 2: wrong domain value, wrong date, unknown check-table values,
+    "        failing regex, missing required remark
+    ( xflag = 'N' budat = '20261301' bukrs = 'ZZZZ' land1 = 'ZZ'
+      waers = 'ZZZ' email = 'not-an-email' remark = '' )
 
-    ( bukrs = lv_bukrs land1 = lv_land1 waers = 'ZZZ' spras = lv_spras
-      budat = sy-datum email = 'fine@example.com' remark = 'only currency wrong' ) ).
+    " row 3: everything fine except the domain value
+    ( xflag = 'Y' budat = sy-datum bukrs = '1000' land1 = 'DE'
+      waers = 'EUR' email = 'fine@example.com' remark = 'only flag wrong' ) ).
 
   DATA(lo_validator) = NEW zcl_adv_validator( ).
 

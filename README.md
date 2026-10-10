@@ -56,9 +56,11 @@ ELSE.
 ENDIF.
 ```
 
-演示程序：运行报表 `ZADV_DEMO`（SA38），构造一个合法行和两个含错行，
-以 ALV 输出全部 findings。合法行取值来自当前系统（T001/T005/TCURC/T002），
-在任何系统上第一行都保持干净。
+演示程序：运行报表 `ZADV_DEMO`（SA38），构造一个典型合法行和两个含错行，
+以 ALV 输出全部 findings。演示**不 SELECT 任何定制表**，可在任何系统上
+激活；检查表类 finding 只在对应检查表（T001/T005/TCURC）存在且可读的系统
+上出现，否则按宽容模式放行（不报错、不崩溃）。确定性的校验（域固定值
+XFELD、日期格式、正则、必填）在任何系统上都能看到效果。
 
 ## 返回结构 ty_finding
 
@@ -96,6 +98,14 @@ ENDIF.
   预去重，或分批调用；域值与转换出口检查无此问题（纯内存）。
 - **不走 `DDUT_INPUT_CHECK`**：直接读 DD07L + 动态 SQL 可控性更好、可缓存、
   无 FM 签名依赖；需要其外键级语义时可替换 `check_table` 实现。
+
+## 常见问题（Troubleshooting）
+
+| 症状 | 原因与处理 |
+|---|---|
+| 激活类时报 `Type "ZIF_ADV_VALIDATOR" is unknown` | 接口未激活。abapGit 导入后对象均为未激活状态：SE80 选中整个包 → 右键 *Activate*（或 abapGit 中 *Activate all*）一次性激活，让系统自行解析依赖顺序；手工创建时按 接口 → 类 → 程序 的顺序激活 |
+| 报 `"T001" is not declared as a table ...` 或 `Unknown column name "SPRSL"` | 说明系统里这些定制表不可见（开发者版/试用版精简系统，或 ABAP Cloud）。demo 已改为无 SELECT 版本；若你的系统是 ABAP Cloud（BTP ES / 公有云），本库整体不适用——直接访问 DD07L/DD01L/TFDIR 和动态 SQL 均被云规范禁止 |
+| 类激活报 7.40 新语法错误（VALUE/COND/inline 声明等） | 本库要求 ABAP 7.40 SP08+（on-prem）。更低版本需整体降级语法 |
 
 ## 仓库结构
 
