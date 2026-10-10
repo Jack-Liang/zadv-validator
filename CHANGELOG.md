@@ -2,6 +2,12 @@
 
 ## 未发布
 
+- 修复（7.40 SP08 激活三处）：`prefetch_ckey_group` 的 `<lt_found>` 改为显式
+  `TYPE STANDARD TABLE` 字段符号（内联声明从 `REF TO data` 推导出泛型，
+  `INTO TABLE @<lt_found>` / `LOOP AT` 均报 not an internal table）；
+  `display_findings` SALV 工厂改传本地副本（IMPORTING 参数不可作 CHANGING）；
+  测试辅助 `append_row` 的 `INSERT lr_row->*` 改用已 ASSIGN 的 `<ls_row>`
+  （泛型引用不得在 INSERT 中直接解引用）
 - 校验插件化（v1.1）：新增自包含接口 `ZIF_ADV_COLUMN_CHECK`（自带 ty_result
   类型，不引用主类，无激活顺序依赖）与 `add_column_check( )` /
   `clear_column_checks( )` 注册 API；插件在内置校验之后逐行执行（首错即止），

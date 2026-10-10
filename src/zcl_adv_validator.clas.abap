@@ -998,10 +998,14 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
 
   METHOD display_findings.
+    " SALV factory wants CHANGING, the IMPORTING parameter must not be
+    " modified -> hand it a local copy
+    DATA(lt_findings) = it_findings.
+
     TRY.
         cl_salv_table=>factory(
           IMPORTING r_salv_table = DATA(lo_alv)
-          CHANGING  t_table      = it_findings ).
+          CHANGING  t_table      = lt_findings ).
 
         lo_alv->get_columns( )->set_optimize( abap_true ).
 
@@ -1698,7 +1702,13 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     ENDTRY.
 
     CREATE DATA lr_found TYPE HANDLE lo_tab.
-    ASSIGN lr_found->* TO FIELD-SYMBOL(<lt_found>).
+
+    " typed on purpose: an inline FIELD-SYMBOL( ) declaration would
+    " infer the generic type from REF TO data, and both
+    " INTO TABLE @<lt_found> and LOOP AT <lt_found> then fail the
+    " activation with "is not an internal table"
+    FIELD-SYMBOL <lt_found> TYPE STANDARD TABLE.
+    ASSIGN lr_found->* TO <lt_found>.
 
     LOOP AT it_fields INTO DATA(lv_col).
       IF lv_cols IS NOT INITIAL.

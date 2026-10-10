@@ -892,7 +892,9 @@ CLASS ltcl_validate IMPLEMENTATION.
       ENDIF.
     ENDLOOP.
 
-    INSERT lr_row->* INTO TABLE <lt_rows>.
+    " <ls_row> points at lr_row->* already: a generic reference must
+    " not be dereferenced (->) directly inside INSERT
+    INSERT <ls_row> INTO TABLE <lt_rows>.
   ENDMETHOD.
 
 ENDCLASS.
