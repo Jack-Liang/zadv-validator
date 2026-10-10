@@ -533,9 +533,11 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
         APPEND lv_where TO lt_cond.
 
-        SELECT COUNT( * ) FROM ( iv_table )
-               INTO lv_cnt
-               WHERE ( lt_cond ).
+        " no blanks inside the parentheses: WHERE( name ) must be a single
+        " compact token or the parser reads it as a static boolean expression
+        SELECT COUNT(*) FROM (iv_table)
+          INTO lv_cnt
+          WHERE (lt_cond).
 
         rv_ok = xsdbool( lv_cnt > 0 ).
 
