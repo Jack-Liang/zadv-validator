@@ -1407,3 +1407,119 @@ CLASS ltcl_validate IMPLEMENTATION.
   ENDMETHOD.
 
 ENDCLASS.
+
+
+"*"* round trip through the real ZADV_RULES table. The unit tests of
+"* ltcl_validate cover the rule MAPPING against in-memory rows and the
+"* lenient zero-rules paths; what only the real table proves is the
+"* SELECT column list of add_rules_from_db( ) - a wrong column name
+"* raises inside the dynamic SELECT and the lenient catch turns it into
+"* "0 rules", which the empty-scenario test cannot tell apart. This
+"* class writes two rows of a dedicated scenario, loads and validates
+"* them, then rolls the LUW back. Own risk level on purpose: it
+"* modifies customizing data transiently (ROLLBACK WORK runs BEFORE
+"* the assertions, so the LUW is cleaned even when one of them aborts)
+CLASS ltcl_db_rules DEFINITION FINAL
+  FOR TESTING
+  RISK LEVEL DANGEROUS
+  DURATION SHORT.
+
+  PRIVATE SECTION.
+    METHODS db_rules_roundtrip FOR TESTING.
+ENDCLASS.
+
+
+CLASS ltcl_db_rules IMPLEMENTATION.
+
+  METHOD db_rules_roundtrip.
+    CONSTANTS lc_scenario TYPE c LENGTH 30 VALUE 'ZADV_UNIT_TEST'.
+
+    " component order of the real table row (minus MANDT, which the
+    " INSERT fills automatically): INSERT dbtab matches positionally,
+    " and ty_db_rule of the main class has a different field order
+    TYPES: BEGIN OF ty_tabl_row,
+             scenario    TYPE c LENGTH 30,
+             rule_id     TYPE c LENGTH 30,
+             fieldname   TYPE fieldname,
+             rule_type   TYPE c LENGTH 10,
+             operator    TYPE c LENGTH 2,
+             other_field TYPE fieldname,
+             required    TYPE flag,
+             severity    TYPE c LENGTH 1,
+             regex       TYPE c LENGTH 255,
+             checktable  TYPE tabname,
+             checkfield  TYPE fieldname,
+             domname     TYPE c LENGTH 30,
+           END OF ty_tabl_row,
+           ty_tabl_rows TYPE STANDARD TABLE OF ty_tabl_row WITH EMPTY KEY.
+
+    TYPES: BEGIN OF ty_row,
+             mail      TYPE string,
+             date_from TYPE budat,
+             date_to   TYPE budat,
+           END OF ty_row,
+           ty_rows TYPE STANDARD TABLE OF ty_row WITH EMPTY KEY.
+
+    " guard like everywhere: no table object on this system -> skip
+    SELECT SINGLE @abap_true FROM dd02l
+           WHERE tabname = 'ZADV_RULES' AND as4local = 'A'
+           INTO @DATA(lv_exists).
+    IF lv_exists <> abap_true.
+      RETURN.
+    ENDIF.
+
+    DATA(lv_count) = 0.
+    DATA lt_findings TYPE zcl_adv_validator=>ty_findings.
+
+    " transient customizing content of this LUW; dynamic table name in
+    " a variable on purpose (no literal in the dynamic position, no
+    " inline VALUE at the FROM TABLE operand - neither is accepted by
+    " the 7.40 SP08 syntax check), and the test class must not create
+    " an activation dependency either
+    DATA(lv_tab) = CONV string( 'ZADV_RULES' ).
+
+    DATA lt_insert TYPE ty_tabl_rows.
+    lt_insert = VALUE #(
+      ( scenario = lc_scenario rule_id = 'R1' rule_type = 'COLUMN'
+        fieldname = 'MAIL' regex = `^a+$` severity = 'W' )
+      ( scenario = lc_scenario rule_id = 'R2' rule_type = 'COMPARE'
+        fieldname = 'DATE_FROM' operator = 'LE' other_field = 'DATE_TO' ) ).
+
+    DELETE FROM (lv_tab) WHERE scenario = lc_scenario.
+
+    INSERT (lv_tab) FROM TABLE lt_insert.
+
+    " own LUW, the SELECT of add_rules_from_db( ) sees the uncommitted
+    " rows; load and validate BEFORE any assertion can abort the test
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+
+    lv_count = lo_validator->add_rules_from_db( iv_scenario = lc_scenario ).
+
+    " mail 'b' violates the regex rule (W, R1), row 1 violates the
+    " comparison rule - both must come from the real table rows
+    lt_findings = lo_validator->validate( VALUE ty_rows(
+      ( mail = 'b' )
+      ( date_from = '20261010' date_to = '20261001' ) ) ).
+
+    ROLLBACK WORK.
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lv_count
+        msg = 'both customizing rows must load from the real table' ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lines( lt_findings )
+        msg = 'regex and comparison findings from the loaded rules' ).
+
+    READ TABLE lt_findings INTO DATA(ls_regex)
+         WITH KEY check_type = zcl_adv_validator=>c_check-regex.
+    cl_abap_unit_assert=>assert_subrc( ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'W' act = CONV string( ls_regex-severity )
+        msg = 'severity of the customizing row must reach the finding' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'R1' act = CONV string( ls_regex-rule_id )
+        msg = 'rule id of the customizing row must be echoed' ).
+  ENDMETHOD.
+
+ENDCLASS.

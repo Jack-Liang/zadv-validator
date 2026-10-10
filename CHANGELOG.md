@@ -2,6 +2,11 @@
 
 ## 未发布
 
+- 单测 50 → 51：新增真实 ZADV_RULES 往返用例（独立测试类，RISK LEVEL
+  DANGEROUS）——专场景写入两行 → `add_rules_from_db( )` 加载 → 端到端断言
+  → `ROLLBACK WORK` 还原（回滚先于断言，失败也清理）。关闭两个空表盲区：
+  ① 有数据时的完整加载回路；② `add_rules_from_db` 的 SELECT 列名/结构映射
+  ——列名写错会抛异常并被宽容 catch 吞成"0 条"，空场景用例无法分辨
 - 重构（纯内部，公共 API 与行为不变，50 个单测不改自应通过）：
   `validate( )` 由约 340 行收敛为 8 段清晰编排——列过滤抽
   `apply_column_filters( )`，规则/plugin/比较/查重的结构性检查（003/020）
