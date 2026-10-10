@@ -12,6 +12,8 @@
 - 单测 28 → 32：规则 severity=W + rule_id 回显且同行 DDIC finding 恒 E 无
   rule_id、规则缺省 severity 归一 E、非法 severity 回退 E、纯 DDIC finding
   的 severity/rule_id 断言
+- 修复：ddic_finding_severity_e 误写静态调用 `NEW ...( )=>validate`（实为
+  实例方法，716 行激活报 RETURNING 参数错），改 `->`
 
 
 ## v1.0.0（2026-10）

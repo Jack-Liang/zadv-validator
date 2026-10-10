@@ -713,7 +713,7 @@ CLASS ltcl_validate IMPLEMENTATION.
 
   METHOD ddic_finding_severity_e.
     " pure DDIC findings always carry a non-initial severity E
-    DATA(lt_findings) = NEW zcl_adv_validator( )=>validate(
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate(
                             VALUE ty_rows( ( status = 'Z' ) ) ).
 
     cl_abap_unit_assert=>assert_equals(
