@@ -103,6 +103,28 @@ DATA(lv_ok) = zcl_adv_validator=>check_value_by_field(
 - 初始值视为合法（与整表校验口径一致，必填请用规则）
 - 元素/字段/表不存在 → 返回 `abap_false` 且 `es_finding-check_type = STRUCTURE`
 
+## 版本元数据
+
+库的版本、作者、仓库地址等信息集中在常量接口 `ZIF_ADV_METADATA`，
+`ZCL_ADV_VALIDATOR` 实现该接口并以同名别名暴露，两种访问方式等价：
+
+```abap
+DATA(lv_version) = zif_adv_metadata=>c_version.   " 直接走接口
+WRITE: / zcl_adv_validator=>c_repository.          " 走类别名
+```
+
+| 常量 | 内容 |
+|---|---|
+| `c_version` | 语义化版本 `MAJOR.MINOR.PATCH`（与 CHANGELOG 同步） |
+| `c_author` | 维护者 |
+| `c_repository` | 仓库与 issue 跟踪地址 |
+| `c_license` | SPDX 许可标识（MIT） |
+| `c_description` | 一句话描述 |
+
+依赖本库的项目可直接读取（"关于"页、升级诊断输出等）；其他开源库也
+可以照搬这个模式——建一个自包含的常量接口，实现类用 `ALIASES` 暴露，
+消费方即可统一按 `zif_xxx=>c_version` 的约定获取库信息。
+
 ## 返回结构 ty_finding
 
 | 字段 | 含义 |
@@ -160,8 +182,9 @@ abaplint.json                            abaplint 基础规则（CI 静态检查
 src/
   package.devc.xml                        包 ZADV_VALIDATOR
   zadv_validator.msag.xml                 SE91 消息类 ZADV_VALIDATOR（001–015）
-  zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，无接口依赖）
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（27 个用例）
+  zif_adv_metadata.intf.abap              元数据常量接口（版本/作者/仓库/许可/描述）
+  zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，实现 ZIF_ADV_METADATA 暴露库元数据）
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（28 个用例）
   zadv_demo.prog.abap                     演示报表
 ```
 
@@ -176,8 +199,12 @@ src/
 （VBELN）、组合外键（KNA1 LAND1+REGIO → T005A：有效组合通过、无效组合
 拦截并验证 DD05S 非同名映射 REGIO→BLAND、伙伴为空的宽容回退、缓存幂等）、
 CURR/QUAN 参照（MARA GEWEI→T006/MSEHI 含 CUNIT 转换、VBAK WAERS→
-TCURC/WAERS，有效值通过 + 未知代码拦截）。
-依赖系统主数据的场景（真实检查表 T001 等）仍以 demo 演示为主；
+TCURC/WAERS，有效值通过 + 未知代码拦截）、元数据接口完整性
+（版本为语义化格式、仓库为 GitHub 地址、类别名与接口常量一致）。
+KNA1/MARA/VBAK/VBELN 等应用 DDIC 对象一律运行时解析（RTTI 动态建表、
+逐组件赋值），测试类不含对应用表的静态类型引用——缺这些对象的系统
+（如无 SD/MM 的精简安装）上相关用例自动空跑跳过，不再阻塞类激活；
+依赖真实主数据的场景（真实检查表 T001 等）仍以 demo 演示为主；
 小写域、区间型域值因缺少跨版本稳定的样例域，暂未纳入单测。
 
 ## 路线图

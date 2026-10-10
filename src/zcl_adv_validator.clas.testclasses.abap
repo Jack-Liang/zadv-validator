@@ -13,6 +13,15 @@ CLASS ltcl_validate DEFINITION FINAL
            END OF ty_row,
            ty_rows TYPE STANDARD TABLE OF ty_row WITH EMPTY KEY.
 
+    "! component/value pairs for the runtime built DDIC test tables: the
+    "! include must not reference application tables (KNA1, MARA, VBAK)
+    "! statically, or it does not even compile on systems without them
+    TYPES: BEGIN OF ty_cell,
+             comp  TYPE fieldname,
+             value TYPE string,
+           END OF ty_cell,
+           ty_cells TYPE STANDARD TABLE OF ty_cell WITH EMPTY KEY.
+
     METHODS:
       non_structured_table FOR TESTING,
       clean_row_no_findings FOR TESTING,
@@ -40,7 +49,21 @@ CLASS ltcl_validate DEFINITION FINAL
       fkey_partner_initial     FOR TESTING,
       fkey_cache_idempotent    FOR TESTING,
       curr_quan_unit_t006      FOR TESTING,
-      curr_quan_currency_tcurc FOR TESTING.
+      curr_quan_currency_tcurc FOR TESTING,
+      metadata_exposed         FOR TESTING,
+
+      "! builds a standard table of the named DDIC structure at runtime;
+      "! an unbound result means the type does not exist on this system
+      "! and the calling test passes without assertions
+      build_ddic_table
+        IMPORTING iv_tabname      TYPE clike
+        RETURNING VALUE(rr_table) TYPE REF TO data,
+
+      "! appends one row with the given component values to a table
+      "! built by build_ddic_table
+      append_row
+        IMPORTING ir_table TYPE REF TO data
+                  it_cells TYPE ty_cells.
 ENDCLASS.
 
 
@@ -383,7 +406,18 @@ CLASS ltcl_validate IMPLEMENTATION.
   METHOD alpha_element_valid.
     " VBELN carries conversion exit ALPHA: the external form passes with
     " the exit executed (padded to the internal form), no fixed values
-    " or check table apply
+    " or check table apply. VBELN is SD metadata: skip on systems
+    " without it
+    TRY.
+        IF CAST cl_abap_elemdescr(
+               cl_abap_typedescr=>describe_by_name( 'VBELN' ) )->is_ddic_type( )
+           = abap_false.
+          RETURN.
+        ENDIF.
+      CATCH cx_root ##NO_TEXT.
+        RETURN.
+    ENDTRY.
+
     cl_abap_unit_assert=>assert_equals(
         exp = abap_true
         act = zcl_adv_validator=>check_value_by_element(
@@ -395,11 +429,21 @@ CLASS ltcl_validate IMPLEMENTATION.
   METHOD fkey_composite_valid.
     " KNA1-REGIO has the composite foreign key LAND1+REGIO -> T005A
     " (LAND1+BLAND): the shipped combination DE/BY (Bavaria) must pass
-    " the combination check without any finding
-    DATA lt_rows TYPE STANDARD TABLE OF kna1 WITH EMPTY KEY.
-    APPEND VALUE #( land1 = 'DE' regio = 'BY' ) TO lt_rows.
+    " the combination check without any finding. The table is built at
+    " runtime: systems without KNA1 skip this test instead of failing
+    " to compile
+    DATA(lr_rows) = build_ddic_table( 'KNA1' ).
+    IF lr_rows IS NOT BOUND.
+      RETURN.
+    ENDIF.
+    FIELD-SYMBOLS <lt_rows> TYPE ANY TABLE.
+    ASSIGN lr_rows->* TO <lt_rows>.
 
-    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
+    append_row( ir_table = lr_rows
+                it_cells = VALUE #( ( comp = 'LAND1' value = 'DE' )
+                                    ( comp = 'REGIO'  value = 'BY' ) ) ).
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( <lt_rows> ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = 0 act = lines( lt_findings )
@@ -411,10 +455,18 @@ CLASS ltcl_validate IMPLEMENTATION.
     " DE/ZZ does not exist in T005A: the combination must be rejected,
     " and the DD05S mapping must show up as BLAND (not the same-name
     " REGIO) together with the partner field LAND1
-    DATA lt_rows TYPE STANDARD TABLE OF kna1 WITH EMPTY KEY.
-    APPEND VALUE #( land1 = 'DE' regio = 'ZZ' ) TO lt_rows.
+    DATA(lr_rows) = build_ddic_table( 'KNA1' ).
+    IF lr_rows IS NOT BOUND.
+      RETURN.
+    ENDIF.
+    FIELD-SYMBOLS <lt_rows> TYPE ANY TABLE.
+    ASSIGN lr_rows->* TO <lt_rows>.
 
-    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
+    append_row( ir_table = lr_rows
+                it_cells = VALUE #( ( comp = 'LAND1' value = 'DE' )
+                                    ( comp = 'REGIO'  value = 'ZZ' ) ) ).
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( <lt_rows> ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings )
@@ -434,10 +486,17 @@ CLASS ltcl_validate IMPLEMENTATION.
     " with an initial partner (LAND1 empty) the composite key cannot be
     " evaluated: the lenient single field fallback applies, 'BY' exists
     " as a region in T005A somewhere -> no finding
-    DATA lt_rows TYPE STANDARD TABLE OF kna1 WITH EMPTY KEY.
-    APPEND VALUE #( regio = 'BY' ) TO lt_rows.
+    DATA(lr_rows) = build_ddic_table( 'KNA1' ).
+    IF lr_rows IS NOT BOUND.
+      RETURN.
+    ENDIF.
+    FIELD-SYMBOLS <lt_rows> TYPE ANY TABLE.
+    ASSIGN lr_rows->* TO <lt_rows>.
 
-    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
+    append_row( ir_table = lr_rows
+                it_cells = VALUE #( ( comp = 'REGIO' value = 'BY' ) ) ).
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( <lt_rows> ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = 0 act = lines( lt_findings )
@@ -448,14 +507,24 @@ CLASS ltcl_validate IMPLEMENTATION.
   METHOD fkey_cache_idempotent.
     " repeated validate( ) (tuple cache hits) and a run after
     " clear_caches( ) (fresh lookups) must return identical findings
-    DATA lt_rows TYPE STANDARD TABLE OF kna1 WITH EMPTY KEY.
-    APPEND VALUE #( land1 = 'DE' regio = 'ZZ' ) TO lt_rows.
-    APPEND VALUE #( land1 = 'DE' regio = 'ZZ' ) TO lt_rows.
+    DATA(lr_rows) = build_ddic_table( 'KNA1' ).
+    IF lr_rows IS NOT BOUND.
+      RETURN.
+    ENDIF.
+    FIELD-SYMBOLS <lt_rows> TYPE ANY TABLE.
+    ASSIGN lr_rows->* TO <lt_rows>.
+
+    append_row( ir_table = lr_rows
+                it_cells = VALUE #( ( comp = 'LAND1' value = 'DE' )
+                                    ( comp = 'REGIO'  value = 'ZZ' ) ) ).
+    append_row( ir_table = lr_rows
+                it_cells = VALUE #( ( comp = 'LAND1' value = 'DE' )
+                                    ( comp = 'REGIO'  value = 'ZZ' ) ) ).
 
     DATA(lo_validator) = NEW zcl_adv_validator( ).
 
-    DATA(lt_first)  = lo_validator->validate( lt_rows ).
-    DATA(lt_second) = lo_validator->validate( lt_rows ).
+    DATA(lt_first)  = lo_validator->validate( <lt_rows> ).
+    DATA(lt_second) = lo_validator->validate( <lt_rows> ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = 2 act = lines( lt_first )
@@ -467,7 +536,7 @@ CLASS ltcl_validate IMPLEMENTATION.
     lo_validator->clear_caches( ).
 
     cl_abap_unit_assert=>assert_equals(
-        exp = lines( lt_first ) act = lines( lo_validator->validate( lt_rows ) )
+        exp = lines( lt_first ) act = lines( lo_validator->validate( <lt_rows> ) )
         msg = 'validate after clear_caches must return identical findings' ).
   ENDMETHOD.
 
@@ -477,11 +546,21 @@ CLASS ltcl_validate IMPLEMENTATION.
     " code is validated against T006/MSEHI (with the CUNIT conversion
     " exit of GEWEI applied). An existing own foreign key on GEWEI
     " produces the very same lookup, both paths are fine here.
-    DATA lt_rows TYPE STANDARD TABLE OF mara WITH EMPTY KEY.
-    APPEND VALUE #( ntgew = '1' gewei = 'KG' ) TO lt_rows.
-    APPEND VALUE #( ntgew = '1' gewei = 'ZZX' ) TO lt_rows.
+    DATA(lr_rows) = build_ddic_table( 'MARA' ).
+    IF lr_rows IS NOT BOUND.
+      RETURN.
+    ENDIF.
+    FIELD-SYMBOLS <lt_rows> TYPE ANY TABLE.
+    ASSIGN lr_rows->* TO <lt_rows>.
 
-    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
+    append_row( ir_table = lr_rows
+                it_cells = VALUE #( ( comp = 'NTGEW' value = '1' )
+                                    ( comp = 'GEWEI' value = 'KG' ) ) ).
+    append_row( ir_table = lr_rows
+                it_cells = VALUE #( ( comp = 'NTGEW' value = '1' )
+                                    ( comp = 'GEWEI' value = 'ZZX' ) ) ).
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( <lt_rows> ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings )
@@ -501,11 +580,21 @@ CLASS ltcl_validate IMPLEMENTATION.
     " VBAK-NETWR (CURR) references the currency column VBAK-WAERS: the
     " currency code is validated against TCURC/WAERS. 'EUR' exists on
     " every system, 'ZZZ9' does not exist anywhere
-    DATA lt_rows TYPE STANDARD TABLE OF vbak WITH EMPTY KEY.
-    APPEND VALUE #( netwr = '1' waers = 'EUR' ) TO lt_rows.
-    APPEND VALUE #( netwr = '1' waers = 'ZZZ9' ) TO lt_rows.
+    DATA(lr_rows) = build_ddic_table( 'VBAK' ).
+    IF lr_rows IS NOT BOUND.
+      RETURN.
+    ENDIF.
+    FIELD-SYMBOLS <lt_rows> TYPE ANY TABLE.
+    ASSIGN lr_rows->* TO <lt_rows>.
 
-    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
+    append_row( ir_table = lr_rows
+                it_cells = VALUE #( ( comp = 'NETWR' value = '1' )
+                                    ( comp = 'WAERS' value = 'EUR' ) ) ).
+    append_row( ir_table = lr_rows
+                it_cells = VALUE #( ( comp = 'NETWR' value = '1' )
+                                    ( comp = 'WAERS' value = 'ZZZ9' ) ) ).
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( <lt_rows> ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings )
@@ -518,6 +607,78 @@ CLASS ltcl_validate IMPLEMENTATION.
         msg = 'currency code column must be checked against TCURC/WAERS' ).
     cl_abap_unit_assert=>assert_equals(
         exp = 2 act = lt_findings[ 1 ]-row ).
+  ENDMETHOD.
+
+
+  METHOD metadata_exposed.
+    " the constants must stay consumable both via the interface and via
+    " the class aliases, and the version must be plain semver so that
+    " consumers can display or compare it
+    cl_abap_unit_assert=>assert_matches(
+        pattern = '^[0-9]+\.[0-9]+\.[0-9]+$'
+        text    = zif_adv_metadata=>c_version
+        msg     = 'c_version is not MAJOR.MINOR.PATCH' ).
+
+    cl_abap_unit_assert=>assert_not_initial(
+        act = zif_adv_metadata=>c_author      msg = 'c_author is initial' ).
+    cl_abap_unit_assert=>assert_matches(
+        pattern = '^https://github[.]com/[^/]+/[^/]+'
+        text    = zif_adv_metadata=>c_repository
+        msg     = 'c_repository is not a github url' ).
+    cl_abap_unit_assert=>assert_not_initial(
+        act = zif_adv_metadata=>c_license      msg = 'c_license is initial' ).
+    cl_abap_unit_assert=>assert_not_initial(
+        act = zif_adv_metadata=>c_description  msg = 'c_description is initial' ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = zif_adv_metadata=>c_version
+        act = zcl_adv_validator=>c_version
+        msg = 'class alias diverges from interface constant' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = zif_adv_metadata=>c_repository
+        act = zcl_adv_validator=>c_repository
+        msg = 'class alias diverges from interface constant' ).
+  ENDMETHOD.
+
+
+  METHOD build_ddic_table.
+    " unknown type or not a structure -> unbound ref, the caller skips
+    " the test; describe_by_name raises instead of returning initial
+    TRY.
+        DATA(lo_descr) = cl_abap_typedescr=>describe_by_name(
+                           to_upper( CONV string( iv_tabname ) ) ).
+        DATA(lo_tab) = cl_abap_tabledescr=>create(
+                         CAST cl_abap_structdescr( lo_descr ) ).
+        CREATE DATA rr_table TYPE HANDLE lo_tab.
+      CATCH cx_root ##NO_TEXT.
+        CLEAR rr_table.
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD append_row.
+    FIELD-SYMBOLS: <lt_rows> TYPE ANY TABLE,
+                   <ls_row>  TYPE any.
+
+    ASSIGN ir_table->* TO <lt_rows>.
+
+    DATA(lo_struct) = CAST cl_abap_structdescr(
+                        CAST cl_abap_tabledescr(
+                          cl_abap_typedescr=>describe_by_data( <lt_rows> )
+                        )->get_table_line_type( ) ).
+
+    DATA lr_row TYPE REF TO data.
+    CREATE DATA lr_row TYPE HANDLE lo_struct.
+    ASSIGN lr_row->* TO <ls_row>.
+
+    LOOP AT it_cells INTO DATA(ls_cell).
+      ASSIGN COMPONENT ls_cell-comp OF STRUCTURE <ls_row> TO FIELD-SYMBOL(<lv_val>).
+      IF sy-subrc = 0.
+        <lv_val> = ls_cell-value.
+      ENDIF.
+    ENDLOOP.
+
+    INSERT lr_row->* INTO TABLE <lt_rows>.
   ENDMETHOD.
 
 ENDCLASS.

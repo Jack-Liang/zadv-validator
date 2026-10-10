@@ -2,6 +2,17 @@
 
 ## 未发布
 
+- 修复：测试类静态引用 KNA1/MARA/VBAK，无对应应用 DDIC 的系统上整个类无法激活
+  （Local Test Classes 报 Type "KNA1" is unknown）；改为运行时 RTTI 动态建表 +
+  逐组件赋值，表不存在的系统上相关用例自动空跑跳过（VBELN ALPHA 用例同步加
+  存在性保护），有表系统上断言不变
+- 新增库元数据常量接口 `ZIF_ADV_METADATA`（`zif_adv_metadata.intf.abap`）：
+  `c_version`/`c_author`/`c_repository`/`c_license`/`c_description` 集中维护，
+  `ZCL_ADV_VALIDATOR` 经 `INTERFACES` + `ALIASES` 同名暴露（`zcl_adv_validator=>c_version`
+  等），依赖方可直接读取库信息（关于页、升级诊断等）；接口仅含常量、自包含，
+  不引入额外激活依赖（v0.2 移除 ZIF_ADV_VALIDATOR 的教训）
+- 单测 27 → 28：元数据完整性（版本为语义化格式、仓库为 GitHub 地址、
+  类别名与接口常量一致）
 - CURR/QUAN 参照校验（v1.0）：金额字段（DFIES-DATATYPE = CURR/QUAN）经
   REFFIELD 找到同结构的货币/单位代码列，代码列无自有外键/规则时自动补
   TCURC/WAERS、T006/MSEHI 检查表（在 resolve_foreign_keys 之后执行，真
