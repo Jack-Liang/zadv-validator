@@ -1,19 +1,70 @@
 CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
 
   PUBLIC SECTION.
-    INTERFACES zif_adv_validator.
 
-    ALIASES:
-      validate    FOR zif_adv_validator~validate,
-      add_rule    FOR zif_adv_validator~add_rule,
-      add_rules   FOR zif_adv_validator~add_rules,
-      clear_rules FOR zif_adv_validator~clear_rules.
+    TYPES:
+      "! One error found by the validator. Row 0 is used for structural
+      "! problems (bad table type, rule references unknown field, ...).
+      BEGIN OF ty_finding,
+        row        TYPE i,
+        fieldname  TYPE fieldname,
+        value      TYPE string,
+        check_type TYPE c LENGTH 12,
+        object     TYPE c LENGTH 60,
+        message    TYPE string,
+      END OF ty_finding,
+      ty_findings TYPE STANDARD TABLE OF ty_finding WITH EMPTY KEY,
 
-    "! Discard cached domain fixed values, check-table lookups and
-    "! conversion-exit existence checks. Call this when DDIC objects or
-    "! customizing data may have changed during the lifetime of the
-    "! validator instance.
-    METHODS clear_caches.
+      "! Explicit rule that adds to or overrides the DDIC derived checks.
+      "! All attributes are optional.
+      BEGIN OF ty_rule,
+        fieldname  TYPE fieldname,
+        required   TYPE abap_bool,
+        checktable TYPE tabname,
+        checkfield TYPE fieldname,
+        domname    TYPE domname_l,
+        regex      TYPE string,
+      END OF ty_rule,
+      ty_rules TYPE STANDARD TABLE OF ty_rule WITH EMPTY KEY.
+
+    CONSTANTS:
+      "! Categories reported in ty_finding-check_type
+      BEGIN OF c_check,
+        structure  TYPE c LENGTH 12 VALUE 'STRUCTURE',
+        required   TYPE c LENGTH 12 VALUE 'REQUIRED',
+        domain     TYPE c LENGTH 12 VALUE 'DOMAIN',
+        checktable TYPE c LENGTH 12 VALUE 'CHECKTABLE',
+        date       TYPE c LENGTH 12 VALUE 'DATE',
+        time       TYPE c LENGTH 12 VALUE 'TIME',
+        numc       TYPE c LENGTH 12 VALUE 'NUMC',
+        regex      TYPE c LENGTH 12 VALUE 'REGEX',
+      END OF c_check.
+
+    METHODS:
+      "! Validate any internal table against DDIC metadata and added
+      "! rules. The row structure must be DDIC based (or a mixed
+      "! structure whose components are DDIC typed) for automatic
+      "! checks; string/numeric helper fields are simply skipped unless
+      "! covered by a rule. Initial values pass all checks unless a rule
+      "! marks them required. The method never raises: unusable
+      "! metadata is reported leniently.
+      validate
+        IMPORTING it_data            TYPE ANY TABLE
+        RETURNING VALUE(rt_findings) TYPE ty_findings,
+
+      add_rule
+        IMPORTING is_rule TYPE ty_rule,
+
+      add_rules
+        IMPORTING it_rules TYPE ty_rules,
+
+      clear_rules,
+
+      "! Discard cached domain fixed values, check-table lookups and
+      "! conversion-exit existence checks. Call this when DDIC objects
+      "! or customizing data may have changed during the lifetime of
+      "! the validator instance.
+      clear_caches.
 
   PRIVATE SECTION.
 
@@ -62,7 +113,7 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       ty_convexits TYPE HASHED TABLE OF ty_convexit WITH UNIQUE KEY name.
 
     DATA:
-      mt_rules     TYPE zif_adv_validator=>ty_rules,
+      mt_rules     TYPE ty_rules,
       mt_domains   TYPE ty_domains,
       mt_ctab_hits TYPE ty_ctab_hits,
       mt_convexits TYPE ty_convexits.
@@ -113,7 +164,7 @@ ENDCLASS.
 
 CLASS zcl_adv_validator IMPLEMENTATION.
 
-  METHOD zif_adv_validator~validate.
+  METHOD validate.
 
     DATA: lv_row  TYPE i,
           lr_line TYPE REF TO data.
@@ -130,7 +181,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
     IF lo_line->kind <> cl_abap_typedescr=>kind_struct.
       APPEND VALUE #( row = 0 fieldname = '-'
-                      check_type = zif_adv_validator=>c_check-structure
+                      check_type = c_check-structure
                       message   = 'Table line type is not a structure' )
              TO rt_findings.
       RETURN.
@@ -149,7 +200,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       ASSIGN COMPONENT <fs_chk>-fieldname OF STRUCTURE <row> TO <val>.
       IF sy-subrc <> 0.
         APPEND VALUE #( row = 0 fieldname = <fs_chk>-fieldname
-                        check_type = zif_adv_validator=>c_check-structure
+                        check_type = c_check-structure
                         message   = |Rule field { <fs_chk>-fieldname } does not exist in the structure| )
                TO rt_findings.
       ENDIF.
@@ -174,7 +225,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         IF <fs_field>-required = abap_true AND <val> IS INITIAL.
           APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                           value = lv_disp
-                          check_type = zif_adv_validator=>c_check-required
+                          check_type = c_check-required
                           message = |Field { <fs_field>-fieldname } is initial (required)| )
                  TO rt_findings.
           CONTINUE.
@@ -196,7 +247,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
             IF check_date( lv_disp ) = abap_false.
               APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                               value = lv_disp
-                              check_type = zif_adv_validator=>c_check-date
+                              check_type = c_check-date
                               message = |Value '{ lv_disp }' is not a valid date (expected YYYYMMDD)| )
                      TO rt_findings.
               CONTINUE.
@@ -205,7 +256,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
             IF check_time( lv_disp ) = abap_false.
               APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                               value = lv_disp
-                              check_type = zif_adv_validator=>c_check-time
+                              check_type = c_check-time
                               message = |Value '{ lv_disp }' is not a valid time (expected HHMMSS)| )
                      TO rt_findings.
               CONTINUE.
@@ -214,7 +265,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
             IF check_numc( lv_disp ) = abap_false.
               APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                               value = lv_disp
-                              check_type = zif_adv_validator=>c_check-numc
+                              check_type = c_check-numc
                               message = |Value '{ lv_disp }' contains characters other than digits| )
                      TO rt_findings.
               CONTINUE.
@@ -248,7 +299,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
            check_domain( iv_domname = lv_dom iv_value = lv_int ) = abap_false.
           APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                           value = lv_disp object = lv_dom
-                          check_type = zif_adv_validator=>c_check-domain
+                          check_type = c_check-domain
                           message = |Value '{ lv_disp }' is not within the fixed values of domain { lv_dom }| )
                  TO rt_findings.
           CONTINUE.
@@ -266,7 +317,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
            check_table( iv_table = lv_ctab iv_field = lv_cfld iv_value = lv_int ) = abap_false.
           APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                           value = lv_disp object = |{ lv_ctab }/{ lv_cfld }|
-                          check_type = zif_adv_validator=>c_check-checktable
+                          check_type = c_check-checktable
                           message = |Value '{ lv_disp }' does not exist in check table { lv_ctab } (field { lv_cfld })| )
                  TO rt_findings.
           CONTINUE.
@@ -277,7 +328,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
            matches( val = lv_disp regex = <fs_field>-regex ) = abap_false.
           APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                           value = lv_disp object = <fs_field>-regex
-                          check_type = zif_adv_validator=>c_check-regex
+                          check_type = c_check-regex
                           message = |Value '{ lv_disp }' does not match the required pattern| )
                  TO rt_findings.
           CONTINUE.
@@ -289,17 +340,17 @@ CLASS zcl_adv_validator IMPLEMENTATION.
   ENDMETHOD.
 
 
-  METHOD zif_adv_validator~add_rule.
+  METHOD add_rule.
     APPEND is_rule TO mt_rules.
   ENDMETHOD.
 
 
-  METHOD zif_adv_validator~add_rules.
+  METHOD add_rules.
     APPEND LINES OF it_rules TO mt_rules.
   ENDMETHOD.
 
 
-  METHOD zif_adv_validator~clear_rules.
+  METHOD clear_rules.
     CLEAR mt_rules.
   ENDMETHOD.
 

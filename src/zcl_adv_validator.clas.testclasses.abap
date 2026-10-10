@@ -42,27 +42,33 @@ CLASS ltcl_validate IMPLEMENTATION.
 
 
   METHOD invalid_date.
-    DATA(lt_rows) = VALUE ty_rows( ( date = '20261301' ) ).
+    " invalid D literals are rejected by the syntax check -> build at runtime
+    DATA(lv_invalid) = `20261301`.
+
+    DATA(lt_rows) = VALUE ty_rows( ( date = lv_invalid ) ).
 
     DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings ) msg = 'invalid date not detected' ).
     cl_abap_unit_assert=>assert_equals(
-        exp = CONV string( zif_adv_validator=>c_check-date )
+        exp = CONV string( zcl_adv_validator=>c_check-date )
         act = CONV string( lt_findings[ 1 ]-check_type ) ).
   ENDMETHOD.
 
 
   METHOD invalid_time.
-    DATA(lt_rows) = VALUE ty_rows( ( time = '246000' ) ).
+    " invalid T literals are rejected by the syntax check -> build at runtime
+    DATA(lv_invalid) = `246000`.
+
+    DATA(lt_rows) = VALUE ty_rows( ( time = lv_invalid ) ).
 
     DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings ) msg = 'invalid time not detected' ).
     cl_abap_unit_assert=>assert_equals(
-        exp = CONV string( zif_adv_validator=>c_check-time )
+        exp = CONV string( zcl_adv_validator=>c_check-time )
         act = CONV string( lt_findings[ 1 ]-check_type ) ).
   ENDMETHOD.
 
@@ -76,7 +82,7 @@ CLASS ltcl_validate IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings ) msg = 'invalid domain value not detected' ).
     cl_abap_unit_assert=>assert_equals(
-        exp = CONV string( zif_adv_validator=>c_check-domain )
+        exp = CONV string( zcl_adv_validator=>c_check-domain )
         act = CONV string( lt_findings[ 1 ]-check_type ) ).
   ENDMETHOD.
 
@@ -114,7 +120,7 @@ CLASS ltcl_validate IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings ) msg = 'missing required value not detected' ).
     cl_abap_unit_assert=>assert_equals(
-        exp = CONV string( zif_adv_validator=>c_check-required )
+        exp = CONV string( zcl_adv_validator=>c_check-required )
         act = CONV string( lt_findings[ 1 ]-check_type ) ).
   ENDMETHOD.
 
@@ -128,7 +134,7 @@ CLASS ltcl_validate IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings ) msg = 'unknown rule field not reported' ).
     cl_abap_unit_assert=>assert_equals(
-        exp = CONV string( zif_adv_validator=>c_check-structure )
+        exp = CONV string( zcl_adv_validator=>c_check-structure )
         act = CONV string( lt_findings[ 1 ]-check_type ) ).
   ENDMETHOD.
 
@@ -141,7 +147,7 @@ CLASS ltcl_validate IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings ) msg = 'unstructured table not rejected' ).
     cl_abap_unit_assert=>assert_equals(
-        exp = CONV string( zif_adv_validator=>c_check-structure )
+        exp = CONV string( zcl_adv_validator=>c_check-structure )
         act = CONV string( lt_findings[ 1 ]-check_type ) ).
   ENDMETHOD.
 

@@ -25,6 +25,10 @@ DATA gt_upload TYPE STANDARD TABLE OF ty_upload WITH EMPTY KEY.
 
 START-OF-SELECTION.
 
+  " an invalid date cannot be written as a literal: the syntax check
+  " rejects literals that do not match type D -> build it at runtime
+  DATA(lv_invalid_date) = `20261301`.
+
   gt_upload = VALUE #(
     " row 1: values that are valid on most systems
     ( xflag = 'X' budat = sy-datum bukrs = '1000' land1 = 'DE'
@@ -32,7 +36,7 @@ START-OF-SELECTION.
 
     " row 2: wrong domain value, wrong date, unknown check-table values,
     "        failing regex, missing required remark
-    ( xflag = 'N' budat = '20261301' bukrs = 'ZZZZ' land1 = 'ZZ'
+    ( xflag = 'N' budat = lv_invalid_date bukrs = 'ZZZZ' land1 = 'ZZ'
       waers = 'ZZZ' email = 'not-an-email' remark = '' )
 
     " row 3: everything fine except the domain value

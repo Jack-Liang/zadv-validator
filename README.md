@@ -103,17 +103,18 @@ XFELD、日期格式、正则、必填）在任何系统上都能看到效果。
 
 | 症状 | 原因与处理 |
 |---|---|
-| 激活类时报 `Type "ZIF_ADV_VALIDATOR" is unknown` | 接口未激活。abapGit 导入后对象均为未激活状态：SE80 选中整个包 → 右键 *Activate*（或 abapGit 中 *Activate all*）一次性激活，让系统自行解析依赖顺序；手工创建时按 接口 → 类 → 程序 的顺序激活 |
-| 报 `"T001" is not declared as a table ...` 或 `Unknown column name "SPRSL"` | 说明系统里这些定制表不可见（开发者版/试用版精简系统，或 ABAP Cloud）。demo 已改为无 SELECT 版本；若你的系统是 ABAP Cloud（BTP ES / 公有云），本库整体不适用——直接访问 DD07L/DD01L/TFDIR 和动态 SQL 均被云规范禁止 |
+| 激活报 `Type "ZIF_ADV_VALIDATOR" is unknown` | 早期版本依赖独立接口对象，导入不完整时会报此错。**已修复**：类型/常量/方法全部并入 `ZCL_ADV_VALIDATOR`，无接口依赖。pull 后若系统残留 `ZIF_ADV_VALIDATOR` 对象，abapGit 会自动删除，或 SE80 手工删除 |
+| 报 `The value "20261301" does not match type "D"` | ABAP 语法检查会静态校验赋给 D/T 类型字段的**字面量**，非法日期/时间写不成字面量。demo 与单测已改为运行期构造（先赋 string 变量再转 D/T）。自己写测试数据时同理 |
+| 报 `"T001" is not declared as a table ...` 或 `Unknown column name "SPRSL"` | 系统里这些定制表不可见（开发者版/试用版精简系统，或 ABAP Cloud）。demo 已改为无 SELECT 版本；若你的系统是 ABAP Cloud（BTP ES / 公有云），本库整体不适用——直接访问 DD07L/DD01L/TFDIR 和动态 SQL 均被云规范禁止 |
 | 类激活报 7.40 新语法错误（VALUE/COND/inline 声明等） | 本库要求 ABAP 7.40 SP08+（on-prem）。更低版本需整体降级语法 |
+| abapGit pull 后仍有旧错误 | SE80 选中整个包 → 右键 *Activate*（或 abapGit 中 *Activate all*）整包激活，不要只激活单个对象 |
 
 ## 仓库结构
 
 ```
 src/
   package.devc.xml                        包 ZADV_VALIDATOR
-  zif_adv_validator.intf.abap             接口：类型、常量、方法
-  zcl_adv_validator.clas.abap             校验器实现
+  zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，无接口依赖）
   zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（9 个用例）
   zadv_demo.prog.abap                     演示报表
 ```
