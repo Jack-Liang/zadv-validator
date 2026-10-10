@@ -1,7 +1,48 @@
 # 更新日志
 
-## 未发布
+## v1.1.0（2026-10）
 
+- 声明式跨字段与行间规则（v1.1）：`add_compare_rule( )` 行级比较——
+  field/operator/other（EQ NE LT LE GT GE），任一操作数为初始值时跳过
+  （要拦截空值请配合 required），无法比较的值按违反处理；finding 定位在
+  左操作数字段，object 为 `FIELD <= OTHER`，消息 016。`add_unique_rule( )`
+  文件内查重——字段组合全表唯一，首次出现放行、后续重复报错并注明首次
+  所在行（消息 017）；fields 为空时退化为锚点字段单查重；组合按字段名
+  排序求值，finding 的 value/object 顺序确定、与注册顺序无关；组合内
+  字段全为初始值的行豁免。两类均为行级/表级规则，不受列过滤影响；
+  未知字段走既有 003、非法操作符走新 020（STRUCTURE）；
+  `clear_compare_rules( )` / `clear_unique_rules( )` 清空各自注册
+- BAL 应用日志 helper（v1.1）：静态方法 `log_findings( it_findings
+  iv_object iv_subobject iv_extnumber iv_commit )`——每条 finding 一条
+  BAL 消息，severity → 消息类型（E/W/I），finding 文本经通用消息 018
+  分装到 4×50 字符占位符（消息构建是纯映射私有方法 build_bal_msgs，
+  可单测）；BAL_LOG_CREATE/LOG_MSG_ADD/DB_SAVE 全部宽容处理：findings
+  为空不建日志，对象未注册 SLG0 或任一步失败返回初始句柄，从不抛异常；
+  保存在当前 LUW（提交由调用方控制），iv_commit = abap_true 时 helper
+  内直接 COMMIT WORK；SLG1 查看
+- 暂存 STRING 截断预检（v1.1）：静态方法 `precheck_truncation(
+  it_data iv_typename iv_severity )`——string 暂存表与目标 DDIC 表/结构
+  的同名列比对长度，超长值报 TRUNCATION finding（缺省 severity W 预警，
+  消息 019 含实际/允许长度，object = 目标/字段）；仅字符类目标类型参与
+  （CHAR/NUMC/DATS/TIMS/ACCP/LANG/UNIT/CUKY/CLNT——金额/数量赋值会报错
+  而非静默截断，无需预警）；暂存侧 raw/xstring 列跳过；目标不存在或非
+  DDIC 结构走既有 012 STRUCTURE，不抛异常
+- 单测补遗（v0.3 起遗留项就此关闭）：小写域——白盒测 internal_value 的
+  大小写折叠（样例域运行期发现自 DD01L-LOWERCASE，无硬编码跨版本依赖）；
+  区间型域值——白盒测 check_domain 的区间端点接受（样例运行期发现自
+  DD07L 区间行）；无样例的系统上自动空跑跳过。测试类经 LOCAL FRIENDS
+  白盒访问私有方法
+- 单测 35 → 47：比较规则四例（违反定位/severity/rule_id 回显、满足与
+  初始操作数跳过、未知字段、非法操作符）、查重三例（组合重复 + 排序
+  无关性 + 首次行号、全初始行豁免、未知字段）、截断两例（超长 W 级
+  报告、合规值与暂存特有列放行）、BAL 两例（消息映射 severity→msgty、
+  4×50 分块、空 findings 不建日志）+ 上述两例补遗
+- demo：ZADV_DEMO 补 v1.1 演示段——比较规则（BUDAT <= DATE_TO，行 2
+  违反/行 3 初始跳过）、查重（REF_ID，行 2 与行 1 重复）、截断预检
+  （目标 DD01L，任何系统可跑）、BAL（对象 ZADV_DEMO，SLG0 注册后
+  SLG1 可见）
+- 消息类扩至 001–020；README 英文版 README_EN.md（与中文版同构，双语
+  互链），中文 README 补对应章节与路线图勾选
 - 修复（真机单测四例失败，组合外键/CURR/QUAN 全部静默放行）：动态建表改用
   `CREATE DATA ... TYPE STANDARD TABLE OF (name)`——`cl_abap_tabledescr=>create(
   structdescr)` 重建的表丢失行类型 DDIC 名，validate( ) 退化到混合结构回退

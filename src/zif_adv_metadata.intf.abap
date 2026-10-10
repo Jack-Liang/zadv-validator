@@ -7,7 +7,7 @@ INTERFACE zif_adv_metadata PUBLIC.
   "! class compiles against it, so it must never depend on anything.
   CONSTANTS:
     "! semantic version (MAJOR.MINOR.PATCH), kept in sync with CHANGELOG.md
-    c_version     TYPE string VALUE '1.0.0',
+    c_version     TYPE string VALUE '1.1.0',
     "! maintainer of the library
     c_author      TYPE string VALUE 'Jack-Liang',
     "! repository and issue tracker
