@@ -1416,12 +1416,14 @@ ENDCLASS.
 "* raises inside the dynamic SELECT and the lenient catch turns it into
 "* "0 rules", which the empty-scenario test cannot tell apart. This
 "* class writes two rows of a dedicated scenario, loads and validates
-"* them, then rolls the LUW back. Own risk level on purpose: it
-"* modifies customizing data transiently (ROLLBACK WORK runs BEFORE
-"* the assertions, so the LUW is cleaned even when one of them aborts)
+"* them, then rolls the LUW back. Own risk level on purpose: transient
+"* writes of persistent data (uncommitted, invisible to other
+"* sessions, ROLLBACK WORK before any assertion) - CRITICAL, not
+"* DANGEROUS: no repository or customizing objects are touched, and
+"* DANGEROUS exceeds the upper limit of the usual run configurations
 CLASS ltcl_db_rules DEFINITION FINAL
   FOR TESTING
-  RISK LEVEL DANGEROUS
+  RISK LEVEL CRITICAL
   DURATION SHORT.
 
   PRIVATE SECTION.
