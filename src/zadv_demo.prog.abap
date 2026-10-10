@@ -123,6 +123,28 @@ CLASS lcl_ddic_demo IMPLEMENTATION.
 ENDCLASS.
 
 
+"* plugin demo: a custom single column check (ZIF_ADV_COLUMN_CHECK)
+"* that flags e-mail addresses of the reserved example.com domain as
+"* informational - any check class can be registered per column, the
+"* row reference even allows simple cross field checks
+CLASS lcl_check_example_domain DEFINITION FINAL.
+  PUBLIC SECTION.
+    INTERFACES zif_adv_column_check.
+ENDCLASS.
+
+CLASS lcl_check_example_domain IMPLEMENTATION.
+  METHOD zif_adv_column_check~check.
+    rs_result-ok = abap_true.
+    IF iv_value CS '@example.com'.
+      rs_result-ok       = abap_false.
+      rs_result-severity = 'I'.
+      rs_result-message  = |demo plugin: { iv_value } uses a reserved domain|.
+      rs_result-rule_id  = 'DEMO_RESERVED_DOMAIN'.
+    ENDIF.
+  ENDMETHOD.
+ENDCLASS.
+
+
 START-OF-SELECTION.
 
   " an invalid date cannot be written as a literal: the syntax check
@@ -149,6 +171,12 @@ START-OF-SELECTION.
   lo_validator->add_rules( VALUE #(
     ( fieldname = 'EMAIL'  regex = `^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$` )
     ( fieldname = 'REMARK' required = abap_true ) ) ).
+
+  " register a custom column check (plugin) for EMAIL, see the local
+  " class lcl_check_example_domain above
+  lo_validator->add_column_check(
+      iv_fieldname = 'EMAIL'
+      io_check     = NEW lcl_check_example_domain( ) ).
 
   " restrict validation to specific columns (optional, example):
   " backtick literals on purpose - 'C' literals do not fit the

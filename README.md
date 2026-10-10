@@ -22,6 +22,7 @@
 | 数字串 `NUMC` | 自动（NUMC） | 只允许数字 |
 | 转换出口 | 自动（CONVEXIT） | 比较前调用 `CONVERSION_EXIT_xxx_INPUT`（存在性查 TFDIR，失败回退原值） |
 | 必填 `REQUIRED` | 规则 | 初始值默认放行，标记 required 后报错 |
+| 插件 `PLUGIN` | 注册（`add_column_check`） | 实现接口 `ZIF_ADV_COLUMN_CHECK` 的自定义单列校验类，逐行收到 值+整行引用（可做简单跨字段）；自行决定 ok/文本/severity/rule_id |
 | 正则 `REGEX` | 规则 | 用于无 DDIC 类型的字段（如 string 邮箱）；按子串搜索匹配，需全串匹配请用 `^...$` 包裹 |
 | 大小写 | 自动 | 域非 lowercase 时按大写比较，兼容从小写来源导入的数据 |
 
@@ -134,6 +135,45 @@ WRITE: / zcl_adv_validator=>c_repository.          " 走类别名
 可以照搬这个模式——建一个自包含的常量接口，实现类用 `ALIASES` 暴露，
 消费方即可统一按 `zif_xxx=>c_version` 的约定获取库信息。
 
+## 校验插件（自定义单列校验）
+
+实现接口 `ZIF_ADV_COLUMN_CHECK` 并按字段注册，即可插入任意自定义校验——
+无需修改校验器本身。插件在**内置校验之后**执行（每字段每行只报第一个错误，
+所以插件只看到校验器自己放行的值），并拿到整行引用，简单跨字段规则立即可做：
+
+```abap
+CLASS lcl_check_shipment DEFINITION FINAL.
+  PUBLIC SECTION.
+    INTERFACES zif_adv_column_check.
+ENDCLASS.
+
+CLASS lcl_check_shipment IMPLEMENTATION.
+  METHOD zif_adv_column_check~check.
+    " 注册在 DELIV_MODE 上：值 = 'EXPRESS' 时要求同一行的 PRIORITY 非空
+    rs_result-ok = abap_true.
+    ASSIGN ir_row->* TO FIELD-SYMBOL(<ls_row>).
+    ASSIGN COMPONENT 'PRIORITY' OF STRUCTURE <ls_row> TO FIELD-SYMBOL(<lv_prio>).
+    IF sy-subrc = 0 AND iv_value = 'EXPRESS' AND <lv_prio> IS INITIAL.
+      rs_result-ok       = abap_false.
+      rs_result-severity = 'E'.                       " 初始/非法值归一为 E
+      rs_result-message  = |express delivery needs a priority|.
+      rs_result-rule_id  = 'R_EXPRESS_PRIO'.          " 回显到 finding-rule_id
+    ENDIF.
+  ENDMETHOD.
+ENDCLASS.
+
+lo_validator->add_column_check(
+    iv_fieldname = 'DELIV_MODE'
+    io_check     = NEW lcl_check_shipment( ) ).
+```
+
+- 接口**自包含**（自带 ty_result 类型，不引用主类），无激活顺序问题
+- 注册到无 DDIC 元数据的列（如 string）也有效；未知字段名在 validate 时报
+  STRUCTURE finding（与规则同一条 003 消息）
+- finding 的 `check_type = 'PLUGIN'`（常量 `c_check-plugin`），文本由插件
+  直接给出（不经 SE91 消息类）
+- `clear_column_checks( )` 清空全部注册
+
 ## 返回结构 ty_finding
 
 | 字段 | 含义 |
@@ -194,8 +234,9 @@ src/
   package.devc.xml                        包 ZADV_VALIDATOR
   zadv_validator.msag.xml                 SE91 消息类 ZADV_VALIDATOR（001–015）
   zif_adv_metadata.intf.abap              元数据常量接口（版本/作者/仓库/许可/描述）
+  zif_adv_column_check.intf.abap           校验插件接口（自定义单列校验）
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，实现 ZIF_ADV_METADATA 暴露库元数据）
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（32 个用例）
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（35 个用例）
   zadv_demo.prog.abap                     演示报表
 ```
 
@@ -236,8 +277,8 @@ KNA1/MARA/VBAK/VBELN 等应用 DDIC 对象一律运行时解析（RTTI 动态建
   真机激活兼容与短转储防护、demo v1.0 演示段（运行期解析 DDIC，最小系统可激活）
 
 ### v1.1（延续）
-- [ ] **校验插件化**：抽出单列校验器接口（域值/检查表/格式/正则各自实现类），开放注册自定义校验
-- [ ] 跨字段与行间规则：如 DATE_FROM <= DATE_TO、文件内查重（依赖插件化）
+- [x] **校验插件化**：新增自包含接口 `ZIF_ADV_COLUMN_CHECK` + `add_column_check( )` 注册开放点，自定义单列校验（含经整行引用 ir_row 的简单跨字段）；内置校验保留在类内——与批量预取/缓存紧耦合，组合外键本身跨字段，拆出反而损失性能与行为兼容
+- [ ] 跨字段与行间规则：如 DATE_FROM <= DATE_TO、文件内查重（自定义跨字段已可经插件 ir_row 实现，声明式框架待做）
 - [x] finding 增强（severity/规则 ID）：`ty_finding` 新增 `severity`（E/W/I，永不为空；DDIC 类恒 E，规则类取规则值）与 `rule_id`（仅规则来源回显）；`ty_rule` 新增 `severity`（缺省/非法归一 E）与 `rule_id`
 - [x] ALV 输出 helper：`display_findings( )` 静态方法（SALV 优化列宽 + 可选标题，无 SALV 回退经典列表）
 - [ ] BAL 应用日志 helper

@@ -55,6 +55,9 @@ CLASS ltcl_validate DEFINITION FINAL
       severity_default_error   FOR TESTING,
       severity_invalid_value   FOR TESTING,
       ddic_finding_severity_e  FOR TESTING,
+      plugin_custom_check      FOR TESTING,
+      plugin_unknown_field     FOR TESTING,
+      plugin_cross_field       FOR TESTING,
 
       "! builds a standard table of the named DDIC structure at runtime;
       "! an unbound result means the type does not exist on this system
@@ -68,6 +71,52 @@ CLASS ltcl_validate DEFINITION FINAL
       append_row
         IMPORTING ir_table TYPE REF TO data
                   it_cells TYPE ty_cells.
+ENDCLASS.
+
+
+"* two reference implementations of the column check plugin interface:
+"* one rejects values without an @ (string column without DDIC), the
+"* other reads the whole row via ir_row and demands a mail address
+"* whenever STATUS = 'A' (simple cross field rule)
+CLASS lcl_plugin_mail DEFINITION FINAL.
+  PUBLIC SECTION.
+    INTERFACES zif_adv_column_check.
+ENDCLASS.
+
+CLASS lcl_plugin_mail IMPLEMENTATION.
+  METHOD zif_adv_column_check~check.
+    rs_result-ok       = abap_false.
+    rs_result-severity = 'W'.
+    rs_result-message  = |custom check: no @ in { iv_value }|.
+    rs_result-rule_id  = 'PLUGIN_MAIL'.
+
+    IF iv_value CS '@'.
+      rs_result-ok = abap_true.
+      CLEAR rs_result-message.
+    ENDIF.
+  ENDMETHOD.
+ENDCLASS.
+
+
+CLASS lcl_plugin_cross DEFINITION FINAL.
+  PUBLIC SECTION.
+    INTERFACES zif_adv_column_check.
+ENDCLASS.
+
+CLASS lcl_plugin_cross IMPLEMENTATION.
+  METHOD zif_adv_column_check~check.
+    " registered on STATUS: 'A' demands a non-initial MAIL in the row
+    rs_result-ok = abap_true.
+    CHECK ir_row IS BOUND.
+    ASSIGN ir_row->* TO FIELD-SYMBOL(<ls_row>).
+    ASSIGN COMPONENT 'MAIL' OF STRUCTURE <ls_row> TO FIELD-SYMBOL(<lv_mail>).
+    IF sy-subrc = 0 AND iv_value = 'A' AND <lv_mail> IS INITIAL.
+      rs_result-ok       = abap_false.
+      rs_result-severity = 'E'.
+      rs_result-message  = 'status A requires a mail address'.
+      rs_result-rule_id  = 'PLUGIN_CROSS'.
+    ENDIF.
+  ENDMETHOD.
 ENDCLASS.
 
 
@@ -722,6 +771,78 @@ CLASS ltcl_validate IMPLEMENTATION.
     cl_abap_unit_assert=>assert_initial(
         act = lt_findings[ 1 ]-rule_id
         msg = 'DDIC finding must not carry a rule id' ).
+  ENDMETHOD.
+
+
+  METHOD plugin_custom_check.
+    " a plugin on a plain string column (no DDIC metadata): the check
+    " class decides ok/text/severity/rule_id, the validator normalizes
+    " the severity before it reaches the finding
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_column_check(
+        iv_fieldname = 'MAIL'
+        io_check     = NEW lcl_plugin_mail( ) ).
+
+    DATA(lt_findings) = lo_validator->validate(
+        VALUE ty_rows( ( mail = 'abc@de' )
+                       ( mail = 'no-at-sign' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'only the failing plugin value must be reported' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-plugin )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'W' act = CONV string( lt_findings[ 1 ]-severity )
+        msg = 'plugin severity W must reach the finding' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'PLUGIN_MAIL' act = CONV string( lt_findings[ 1 ]-rule_id )
+        msg = 'plugin rule id must be echoed' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lt_findings[ 1 ]-row ).
+  ENDMETHOD.
+
+
+  METHOD plugin_unknown_field.
+    " registrations for fields that do not exist are structural
+    " findings, same 003 path as rules
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_column_check(
+        iv_fieldname = 'DOES_NOT_EXIST'
+        io_check     = NEW lcl_plugin_mail( ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows( ( ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'unknown plugin field not reported' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-structure )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+  ENDMETHOD.
+
+
+  METHOD plugin_cross_field.
+    " ir_row gives the plugin the whole row: STATUS = 'A' demands a
+    " mail address, a simple cross field rule without any framework
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_column_check(
+        iv_fieldname = 'STATUS'
+        io_check     = NEW lcl_plugin_cross( ) ).
+
+    DATA(lt_findings) = lo_validator->validate(
+        VALUE ty_rows( ( status = 'A' mail = '' )
+                       ( status = 'A' mail = 'x@y' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'status A without mail must be reported, with mail passes' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'PLUGIN_CROSS' act = CONV string( lt_findings[ 1 ]-rule_id )
+        msg = 'cross field plugin finding expected' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lt_findings[ 1 ]-row ).
   ENDMETHOD.
 
 

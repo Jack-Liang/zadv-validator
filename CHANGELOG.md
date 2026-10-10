@@ -2,6 +2,17 @@
 
 ## 未发布
 
+- 校验插件化（v1.1）：新增自包含接口 `ZIF_ADV_COLUMN_CHECK`（自带 ty_result
+  类型，不引用主类，无激活顺序依赖）与 `add_column_check( )` /
+  `clear_column_checks( )` 注册 API；插件在内置校验之后逐行执行（首错即止），
+  收到 行号/字段名/外部格式值/**整行引用 ir_row**——简单跨字段规则即刻可做；
+  finding 走新类别 `PLUGIN`（c_check-plugin），severity 经 normalize、
+  rule_id/文本由插件给出；注册到无 DDIC 元数据的列自动合成字段，未知字段名
+  走既有 003 STRUCTURE 报告。内置校验保留在类内：与批量预取/缓存紧耦合、
+  组合外键本身跨字段，拆出损失大于收益
+- 单测 32 → 35：插件自定义校验（string 列 + W + rule_id 回显）、未知字段
+  STRUCTURE、跨字段插件（STATUS='A' 需 MAIL，经 ir_row 读同行）；demo 增加
+  example.com 域名 I 级插件演示
 - finding 增强（v1.1）：`ty_finding` 新增 `severity`（E/W/I，**永不为空**——DDIC 类
   检查恒为 E，规则类检查取规则值）与 `rule_id`（仅规则来源回显，便于调用方
   分支/统计）；`ty_rule` 新增 `severity`（初始/非法值经 normalize_severity 归一

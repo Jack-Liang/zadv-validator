@@ -69,6 +69,7 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         time       TYPE c LENGTH 12 VALUE 'TIME',
         numc       TYPE c LENGTH 12 VALUE 'NUMC',
         regex      TYPE c LENGTH 12 VALUE 'REGEX',
+        plugin     TYPE c LENGTH 12 VALUE 'PLUGIN',
       END OF c_check,
 
       "! severities reported in ty_finding-severity
@@ -97,6 +98,18 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         IMPORTING it_rules TYPE ty_rules,
 
       clear_rules,
+
+      "! register a custom single column check (plugin, see interface
+      "! ZIF_ADV_COLUMN_CHECK) for one field. It runs for every row in
+      "! which the field is non-initial and has passed the built-in
+      "! checks; the field does not need DDIC metadata. Unknown field
+      "! names are reported as STRUCTURE findings by validate( ).
+      add_column_check
+        IMPORTING iv_fieldname TYPE fieldname
+                  io_check     TYPE REF TO zif_adv_column_check,
+
+      "! discard all column check registrations (add_column_check)
+      clear_column_checks,
 
       "! Restrict validation to the given columns (initial = all columns).
       "! Rules on other columns are skipped as well. Unknown names are
@@ -231,6 +244,14 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       END OF ty_convexit,
       ty_convexits TYPE HASHED TABLE OF ty_convexit WITH UNIQUE KEY name,
 
+      "! registered custom column checks (plugins), see add_column_check
+      BEGIN OF ty_plugin,
+        fieldname TYPE fieldname,
+        check     TYPE REF TO zif_adv_column_check,
+      END OF ty_plugin,
+      ty_plugins TYPE SORTED TABLE OF ty_plugin
+                   WITH NON-UNIQUE KEY fieldname,
+
       "! internal-format values to look up in one check table column,
       "! deduplicated (hashed) and as index table for chunked iteration
       ty_values    TYPE STANDARD TABLE OF string WITH EMPTY KEY,
@@ -282,6 +303,7 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
 
     DATA:
       mt_rules          TYPE ty_rules,
+      mt_plugins        TYPE ty_plugins,
       mt_only_fields    TYPE ty_fieldnames,
       mt_exclude_fields TYPE ty_fieldnames,
       mt_domains        TYPE ty_domains,
@@ -458,7 +480,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
   METHOD validate.
 
     DATA: lv_row  TYPE i,
-          lr_line TYPE REF TO data.
+          lr_line TYPE REF TO data,
+          lr_row  TYPE REF TO data.
 
     FIELD-SYMBOLS: <row> TYPE any,
                    <val> TYPE any.
@@ -556,6 +579,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     " ---------------------------------------------------------------------
     LOOP AT it_data ASSIGNING <row>.
       lv_row = lv_row + 1.
+      GET REFERENCE OF <row> INTO lr_row.
 
       LOOP AT lt_fields ASSIGNING FIELD-SYMBOL(<fs_field>).
 
@@ -746,6 +770,31 @@ CLASS zcl_adv_validator IMPLEMENTATION.
           ENDIF.
         ENDIF.
 
+        " registered column checks (plugins) ..........................
+        " they run last: only values the validator itself accepted reach
+        " them, the first failing plugin finishes the field
+        LOOP AT mt_plugins ASSIGNING FIELD-SYMBOL(<fs_plugin>)
+             WHERE fieldname = <fs_field>-fieldname.
+
+          DATA(ls_result) = <fs_plugin>-check->check(
+                              iv_row       = lv_row
+                              iv_fieldname = <fs_field>-fieldname
+                              iv_value     = lv_disp
+                              ir_row       = lr_row ).
+
+          IF ls_result-ok <> abap_true.
+            APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
+                            value = lv_disp
+                            object = ls_result-object
+                            check_type = c_check-plugin
+                            message = ls_result-message
+                            severity = normalize_severity( ls_result-severity )
+                            rule_id  = ls_result-rule_id )
+                   TO rt_findings.
+            EXIT.
+          ENDIF.
+        ENDLOOP.
+
       ENDLOOP.
     ENDLOOP.
 
@@ -764,6 +813,18 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
   METHOD clear_rules.
     CLEAR mt_rules.
+  ENDMETHOD.
+
+
+  METHOD add_column_check.
+    INSERT VALUE #( fieldname = to_upper( CONV string( iv_fieldname ) )
+                    check     = io_check )
+           INTO TABLE mt_plugins.
+  ENDMETHOD.
+
+
+  METHOD clear_column_checks.
+    CLEAR mt_plugins.
   ENDMETHOD.
 
 
@@ -1069,6 +1130,16 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       " normalized on purpose: E when initial, last rule wins
       <fs_field>-rule_severity = normalize_severity( <ls_rule>-severity ).
 
+    ENDLOOP.
+
+    " plugin registrations for columns without DDIC metadata need a
+    " synthetic field so the row loop visits them; the structural check
+    " in validate( ) then reports unknown names the same way as rules
+    LOOP AT mt_plugins INTO DATA(ls_plugin).
+      INSERT VALUE #( fieldname = ls_plugin-fieldname
+                      synthetic = abap_true
+                      datatype  = 'CHAR' )
+             INTO TABLE rt_fields.
     ENDLOOP.
 
   ENDMETHOD.
