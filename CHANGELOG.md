@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布
+## v1.0.0（2026-10）
 
 - demo：ZADV_DEMO 补 v1.0 特性演示段——组合外键（KNA1 LAND1+REGIO → T005A）、
   单位参照（MARA NTGEW → GEWEI → T006）、货币参照（VBAK NETWR → WAERS →

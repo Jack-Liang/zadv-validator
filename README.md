@@ -218,15 +218,19 @@ KNA1/MARA/VBAK/VBELN 等应用 DDIC 对象一律运行时解析（RTTI 动态建
 - [x] 单测补强：转换出口（ALPHA/VBELN）、缓存幂等、规则路由检查表（checktable/checkfield 覆盖）、缺失检查表宽容回退（小写域、区间型域值缺跨版本稳定样例域，挪至 v1.0）
 - [x] abaplint 基础配置 + GitHub Actions CI（`.github/workflows/abaplint.yml`）
 
-### v1.0（功能完整版）
+### v1.0（功能完整版）——已发布 1.0.0
 - [x] **完整外键映射**：读 DD05S，支持非同名检查表字段与组合键（多字段外键）。
   伙伴字段缺失/被列过滤排除 → 单字段语义；伙伴值为空 → 宽容回退单字段检查；
   MANDT 不参与组合；规则指定检查表不受 DD05S 影响
+- [x] CURR/QUAN 参照校验：货币列参照 TCURC、单位列参照 T006（DFIES-REFTABLE/REFFIELD 自动识别）。
+  仅当代码列无自有外键/规则时补检查，绝不重复报错
+- [x] 计划外交付：库元数据接口 `ZIF_ADV_METADATA`（c_version 等常量）、7.40 SP08
+  真机激活兼容与短转储防护、demo v1.0 演示段（运行期解析 DDIC，最小系统可激活）
+
+### v1.1（延续）
 - [ ] **校验插件化**：抽出单列校验器接口（域值/检查表/格式/正则各自实现类），开放注册自定义校验
 - [ ] 跨字段与行间规则：如 DATE_FROM <= DATE_TO、文件内查重（依赖插件化）
 - [ ] finding 增强：severity（E/W/I）、规则 ID；BAL 应用日志与 ALV 输出 helper
-- [x] CURR/QUAN 参照校验：货币列参照 TCURC、单位列参照 T006（DFIES-REFTABLE/REFFIELD 自动识别）。
-  仅当代码列无自有外键/规则时补检查，绝不重复报错
 - [ ] 暂存 STRING 字段截断预检（超长值入库前预警）
 - [ ] 单测补遗：小写域、区间型域值（待选定跨版本稳定的样例域，或以 CDS/临时 DDIC 方式自建）
 - [ ] README 英文版
