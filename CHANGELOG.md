@@ -2,6 +2,10 @@
 
 ## 未发布
 
+- 修复：7.40 SP08 激活再报两处——`build_msg` 参数改 `TYPE clike`（按值
+  `TYPE string` 在该版本同样拒绝 C(30) 实参，实测确认）；组合键批量预取的
+  `INTO TABLE <lt_found>` 字段符号目标补 `@` 转义（普通变量目标才可免转义，
+  单列预取的 `lt_found` 不受影响）
 - 修复：7.40 SP08 激活失败三处（上一轮 KNA1 修复后才暴露）——测试类
   `assert_matches` 在旧 Basis 不存在，改用 `assert_text_matches`；
   `build_msg` 的 iv_a/iv_b/iv_c 改按值传递（按引用的 string 参数收到

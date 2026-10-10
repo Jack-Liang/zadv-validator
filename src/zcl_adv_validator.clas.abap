@@ -402,14 +402,16 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         RETURNING VALUE(rv_ok) TYPE abap_bool,
 
       "! finding message text from the SE91 message class; operands for
-      "! unused placeholders are supplied blank. Pass by value on
-      "! purpose: a by-reference string parameter would reject the
-      "! character-like call arguments (fieldname, domname, ...)
+      "! unused placeholders are supplied blank. clike by reference on
+      "! purpose: it accepts the C(30) metadata arguments (fieldname,
+      "! domname, ...) as well as string values; a typed string
+      "! parameter was rejected by the 7.40 SP08 syntax check even
+      "! when passed by value
       build_msg
         IMPORTING iv_nr          TYPE ty_msgnr
-                  VALUE(iv_a)    TYPE string OPTIONAL
-                  VALUE(iv_b)    TYPE string OPTIONAL
-                  VALUE(iv_c)    TYPE string OPTIONAL
+                  iv_a           TYPE clike OPTIONAL
+                  iv_b           TYPE clike OPTIONAL
+                  iv_c           TYPE clike OPTIONAL
         RETURNING VALUE(rv_text) TYPE string.
 
 ENDCLASS.
@@ -1543,9 +1545,11 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       TRY.
           CLEAR lt_found.
 
-          " fully classic Open SQL on purpose, see check_table
+          " classic dynamic SQL like check_table, but a field symbol as
+          " INTO target needs the @ escape (plain variables do not);
+          " the escaped form coexists with dynamic FROM/WHERE on 7.40
           SELECT DISTINCT (lv_cols) FROM (iv_table)
-            INTO TABLE <lt_found>
+            INTO TABLE @<lt_found>
             WHERE (lv_where).
 
           LOOP AT <lt_found> ASSIGNING FIELD-SYMBOL(<ls_found>).
