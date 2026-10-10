@@ -2,6 +2,12 @@
 
 ## 未发布
 
+- 修复：`describe_by_name` 对未知类型在部分版本抛出**无法捕获**的异常（精简版
+  开发系统上单测 TYPE_NOT_FOUND 短转储，`CATCH cx_root` 拦不住）；所有可收到
+  未知名字的入口先以 `dd02l`/`dd04l` SELECT 预检存在性——测试辅助
+  `build_ddic_table`、ALPHA 用例守卫、以及主类 `check_single` /
+  `check_value_by_field`（未知名字走原有 STRUCTURE finding 宽容路径，不再有
+  短转储风险）
 - 修复：7.40 SP08 激活再报两处——`build_msg` 参数改 `TYPE clike`（按值
   `TYPE string` 在该版本同样拒绝 C(30) 实参，实测确认）；组合键批量预取的
   `INTO TABLE <lt_found>` 字段符号目标补 `@` 转义（普通变量目标才可免转义，

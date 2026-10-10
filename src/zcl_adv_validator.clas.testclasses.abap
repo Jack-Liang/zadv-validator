@@ -407,16 +407,14 @@ CLASS ltcl_validate IMPLEMENTATION.
     " VBELN carries conversion exit ALPHA: the external form passes with
     " the exit executed (padded to the internal form), no fixed values
     " or check table apply. VBELN is SD metadata: skip on systems
-    " without it
-    TRY.
-        IF CAST cl_abap_elemdescr(
-               cl_abap_typedescr=>describe_by_name( 'VBELN' ) )->is_ddic_type( )
-           = abap_false.
-          RETURN.
-        ENDIF.
-      CATCH cx_root ##NO_TEXT.
-        RETURN.
-    ENDTRY.
+    " without it, existence via dd04l because describe_by_name dumps
+    " (uncatchably) for unknown names on some releases
+    SELECT SINGLE @abap_true FROM dd04l
+           WHERE rollname = 'VBELN' AND as4local = 'A'
+           INTO @DATA(lv_vbeln).
+    IF lv_vbeln <> abap_true.
+      RETURN.
+    ENDIF.
 
     cl_abap_unit_assert=>assert_equals(
         exp = abap_true
@@ -642,11 +640,20 @@ CLASS ltcl_validate IMPLEMENTATION.
 
 
   METHOD build_ddic_table.
-    " unknown type or not a structure -> unbound ref, the caller skips
-    " the test; describe_by_name raises instead of returning initial
+    " unknown type -> unbound ref, the caller skips the test. Existence
+    " is pre-checked on dd02l: describe_by_name dumps (uncatchably) for
+    " unknown names on some releases, a SELECT cannot raise
+    DATA(lv_name) = to_upper( CONV string( iv_tabname ) ).
+
+    SELECT SINGLE @abap_true FROM dd02l
+           WHERE tabname = @lv_name AND as4local = 'A'
+           INTO @DATA(lv_exists).
+    IF lv_exists <> abap_true.
+      RETURN.
+    ENDIF.
+
     TRY.
-        DATA(lo_descr) = cl_abap_typedescr=>describe_by_name(
-                           to_upper( CONV string( iv_tabname ) ) ).
+        DATA(lo_descr) = cl_abap_typedescr=>describe_by_name( lv_name ).
         DATA(lo_tab) = cl_abap_tabledescr=>create(
                          CAST cl_abap_structdescr( lo_descr ) ).
         CREATE DATA rr_table TYPE HANDLE lo_tab.

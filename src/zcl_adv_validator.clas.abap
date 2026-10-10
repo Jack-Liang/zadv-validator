@@ -745,18 +745,26 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     DATA(lv_tabname) = to_upper( CONV string( iv_tabname ) ).
     DATA(lv_field)   = to_upper( CONV string( iv_fieldname ) ).
 
+    " existence pre-check on dd02l: describe_by_name dumps (uncatchably)
+    " for unknown names on some releases, a SELECT cannot raise
+    SELECT SINGLE @abap_true FROM dd02l
+           WHERE tabname = @lv_tabname AND as4local = 'A'
+           INTO @DATA(lv_tab_exists).
+
     DATA lo_struct TYPE REF TO cl_abap_structdescr.
-    TRY.
-        DATA(lo_descr) = cl_abap_typedescr=>describe_by_name( lv_tabname ).
-        IF lo_descr->kind = cl_abap_typedescr=>kind_table.
-          lo_descr = CAST cl_abap_tabledescr( lo_descr )->get_table_line_type( ).
-        ENDIF.
-        IF lo_descr->kind = cl_abap_typedescr=>kind_struct.
-          lo_struct = CAST cl_abap_structdescr( lo_descr ).
-        ENDIF.
-      CATCH cx_root ##NO_TEXT.
-        CLEAR lo_struct.
-    ENDTRY.
+    IF lv_tab_exists = abap_true.
+      TRY.
+          DATA(lo_descr) = cl_abap_typedescr=>describe_by_name( lv_tabname ).
+          IF lo_descr->kind = cl_abap_typedescr=>kind_table.
+            lo_descr = CAST cl_abap_tabledescr( lo_descr )->get_table_line_type( ).
+          ENDIF.
+          IF lo_descr->kind = cl_abap_typedescr=>kind_struct.
+            lo_struct = CAST cl_abap_structdescr( lo_descr ).
+          ENDIF.
+        CATCH cx_root ##NO_TEXT.
+          CLEAR lo_struct.
+      ENDTRY.
+    ENDIF.
 
     IF lo_struct IS INITIAL OR lo_struct->is_ddic_type( ) = abap_false.
       es_finding-row        = 0.
@@ -806,12 +814,19 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
     DATA(lv_rollname) = to_upper( CONV string( iv_rollname ) ).
 
+    " existence pre-check on dd04l, same reason as check_value_by_field
+    SELECT SINGLE @abap_true FROM dd04l
+           WHERE rollname = @lv_rollname AND as4local = 'A'
+           INTO @DATA(lv_elem_exists).
+
     DATA lo_descr TYPE REF TO cl_abap_typedescr.
-    TRY.
-        lo_descr = cl_abap_typedescr=>describe_by_name( lv_rollname ).
-      CATCH cx_root ##NO_TEXT.
-        CLEAR lo_descr.
-    ENDTRY.
+    IF lv_elem_exists = abap_true.
+      TRY.
+          lo_descr = cl_abap_typedescr=>describe_by_name( lv_rollname ).
+        CATCH cx_root ##NO_TEXT.
+          CLEAR lo_descr.
+      ENDTRY.
+    ENDIF.
 
     IF lo_descr IS INITIAL
        OR lo_descr->kind <> cl_abap_typedescr=>kind_elem
