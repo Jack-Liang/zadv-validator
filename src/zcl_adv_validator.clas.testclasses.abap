@@ -1244,7 +1244,7 @@ CLASS ltcl_validate IMPLEMENTATION.
       ( scenario = 'T' rule_id = 'R1' rule_type = 'COLUMN'
         fieldname = 'MAIL' regex = `^a+$` severity = 'W' )
       ( scenario = 'T' rule_id = 'R2' rule_type = 'COLUMN'
-        fieldname = 'REMARK' required = 'X' )
+        fieldname = 'DATE' required = 'X' )
       ( scenario = 'T' rule_id = 'R3' rule_type = 'COMPARE'
         fieldname = 'DATE_FROM' operator = 'LE' other_field = 'DATE_TO' )
       ( scenario = 'T' rule_id = 'R4' rule_type = 'UNIQUE'
@@ -1279,10 +1279,12 @@ CLASS ltcl_validate IMPLEMENTATION.
         msg = 'both rows of the rule id contribute a key field' ).
 
     " end to end: the mapped rules validate exactly like registered
-    " ones (regex W + rule id echo, required, violated comparison)
+    " ones (regex W + rule id echo, required, violated comparison);
+    " row 1 carries a valid DATE so only the comparison fires, row 2
+    " leaves DATE initial -> the required rule from the table fires
     DATA(lt_findings) = lo_validator->validate( VALUE ty_rows(
-      ( date_from = '20261010' date_to = '20261001' )
-      ( mail = 'b' remark = '' ) ) ).
+      ( date = '20261010' date_from = '20261010' date_to = '20261001' )
+      ( mail = 'b' ) ) ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = 3 act = lines( lt_findings )

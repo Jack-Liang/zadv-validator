@@ -2,6 +2,10 @@
 
 ## 未发布（v2.0）
 
+- 修复（真机测试类激活：No component exists "REMARK"）：db_rules_mapping
+  用例误用了 demo 的 ty_upload 字段名——测试类 ty_row 无 REMARK 组件；
+  required 配置行与端到端数据改用 ty_row 现有的 DATE 字段（行 1 带合法
+  日期只触发比较，行 2 留空触发 required，断言计数不变）
 - 修复（真机表激活 DT609）：数据类 `CUS1` 非标准交付值（SAP 仅为客户
   预留、多数系统未定义），ZADV_RULES 技术设置改为标准数据类 `APPL2`
   （组织与定制数据）；定制传输属性 `CONTFLAG C`（随定制请求传输）不变
