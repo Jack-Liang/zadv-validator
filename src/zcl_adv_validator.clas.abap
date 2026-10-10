@@ -1707,7 +1707,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     " infer the generic type from REF TO data, and both
     " INTO TABLE @<lt_found> and LOOP AT <lt_found> then fail the
     " activation with "is not an internal table"
-    FIELD-SYMBOL <lt_found> TYPE STANDARD TABLE.
+    FIELD-SYMBOLS <lt_found> TYPE STANDARD TABLE.
     ASSIGN lr_found->* TO <lt_found>.
 
     LOOP AT it_fields INTO DATA(lv_col).
