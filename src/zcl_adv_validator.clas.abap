@@ -1546,11 +1546,11 @@ CLASS zcl_adv_validator IMPLEMENTATION.
           CLEAR lt_found.
 
           " classic dynamic SQL like check_table, but a field symbol as
-          " INTO target needs the @ escape (plain variables do not);
-          " the escaped form coexists with dynamic FROM/WHERE on 7.40
+          " INTO target needs the @ escape (plain variables do not) and
+          " the @ form demands the INTO clause at the end of the statement
           SELECT DISTINCT (lv_cols) FROM (iv_table)
-            INTO TABLE @<lt_found>
-            WHERE (lv_where).
+            WHERE (lv_where)
+            INTO TABLE @<lt_found>.
 
           LOOP AT <lt_found> ASSIGNING FIELD-SYMBOL(<ls_found>).
             CLEAR lv_ftuple.
