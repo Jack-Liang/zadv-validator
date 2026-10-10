@@ -1,0 +1,21 @@
+{
+  "global": {
+    "files": "/src/**/*.*",
+    "skipGeneratedGatewayClasses": true,
+    "skipGeneratedPersistentClasses": true,
+    "skipGeneratedFunctionGroups": true,
+    "skipGeneratedBOPFInterfaces": true
+  },
+  "rules": {
+    "7bit_ascii": true,
+    "avoid_use": true,
+    "contains_tab": true,
+    "empty_statement": true,
+    "line_length": { "length": 120 },
+    "max_one_statement": true,
+    "obsolete_statement": true,
+    "sequential_blank": true,
+    "space_before_dot": true,
+    "whitespace_end": true
+  }
+}

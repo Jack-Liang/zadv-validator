@@ -2,6 +2,21 @@
 
 ## 未发布（v0.3 进行中）
 
+- 性能：检查表校验由"每个不同值一次 `SELECT COUNT(*)`"改为行循环前按
+  检查表/字段分组收集去重内部格式值、每批 100 值 `WHERE field IN (...)`
+  批量预填缓存；动态 SQL 失败（不可读检查表）不缓存，逐值回退宽容模式，
+  行为与原先一致
+- 重构：转换出口 + 大小写归一抽取为 `internal_value`（行循环与批量预取
+  共用同一套键变换，保证缓存键一致）
+- 消息类化（SE91）：新增消息类 `ZADV_VALIDATOR`（`zadv_validator.msag.xml`，
+  001–014），全部 finding 文本经 `build_msg` 取自消息类，可 SE63 翻译；
+  注意占位符上限 50 字符，超长 value 在 message 中截断（finding-value 仍为全值）
+- 单测 17 → 21：检查表规则路由（checktable/checkfield 覆盖，以 DD07L/DOMNAME
+  为检查表，同时覆盖批量 IN 预取与大小写归一键）、缺失检查表宽容回退
+  （批量与逐值两层均不崩溃）、缓存幂等（重复 validate 与 clear_caches 后
+  结果一致）、ALPHA 转换出口（VBELN 外部格式）；域值 finding 增加外部原值断言
+- 工程：abaplint 基础规则（`abaplint.json`）+ GitHub Actions CI
+  （`.github/workflows/abaplint.yml`，push/PR 触发）
 - 新增单值校验静态方法 `check_value_by_element` / `check_value_by_field`（复用 validate 全套 DDIC 校验，
   返回真假 + finding 原因；初始值视为合法）
 - 修复：`ty_fieldnames` 行类型 fieldname → string（`VALUE #()` 字面量兼容性，上游反馈）

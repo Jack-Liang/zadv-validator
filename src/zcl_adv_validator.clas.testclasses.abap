@@ -30,7 +30,11 @@ CLASS ltcl_validate DEFINITION FINAL
       element_value_invalid_domain FOR TESTING,
       element_value_invalid_date   FOR TESTING,
       field_value_invalid_domain   FOR TESTING,
-      field_value_unknown  FOR TESTING.
+      field_value_unknown  FOR TESTING,
+      checktable_rule_routes FOR TESTING,
+      lenient_missing_ctab  FOR TESTING,
+      cache_idempotent      FOR TESTING,
+      alpha_element_valid   FOR TESTING.
 ENDCLASS.
 
 
@@ -92,6 +96,9 @@ CLASS ltcl_validate IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
         exp = CONV string( zcl_adv_validator=>c_check-domain )
         act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'Z' act = CONV string( lt_findings[ 1 ]-value )
+        msg = 'finding must carry the original external value' ).
   ENDMETHOD.
 
 
@@ -291,6 +298,91 @@ CLASS ltcl_validate IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
         exp = CONV string( zcl_adv_validator=>c_check-structure )
         act = CONV string( ls_finding-check_type ) ).
+  ENDMETHOD.
+
+
+  METHOD checktable_rule_routes.
+    " rule routes the lookup to DD07L/DOMNAME instead of the DDIC default:
+    " 'AS4LOCAL' is a domain name present in DD07L (it has fixed values),
+    " 'ZZ_...' is not. Both rows are covered by one batched IN( ) select
+    " and the lowercase input proves the case folding of the search key
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_rule( VALUE #( fieldname  = 'MAIL'
+                                     checktable = 'DD07L'
+                                     checkfield = 'DOMNAME' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows(
+      ( mail = 'as4local' )
+      ( mail = 'zz_not_a_domain_9' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'only the unknown domain name must be reported' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-checktable )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = |DD07L/DOMNAME|
+        act = CONV string( lt_findings[ 1 ]-object )
+        msg = 'rule checkfield must be used for the lookup' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lt_findings[ 1 ]-row ).
+  ENDMETHOD.
+
+
+  METHOD lenient_missing_ctab.
+    " an unreadable check table must never block the data flow: neither
+    " the batched select nor the per-value fallback may raise
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_rule( VALUE #( fieldname  = 'MAIL'
+                                     checktable = 'ZADV_NO_SUCH_TABLE' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows( ( mail = 'X' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 0 act = lines( lt_findings )
+        msg = 'missing check table must pass leniently' ).
+  ENDMETHOD.
+
+
+  METHOD cache_idempotent.
+    " repeated validate( ) on the same instance (cache hits) and after
+    " clear_caches( ) (fresh lookups) must return identical findings
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_rule( VALUE #( fieldname  = 'MAIL'
+                                     checktable = 'DD07L'
+                                     checkfield = 'DOMNAME' ) ).
+
+    DATA(lt_rows) = VALUE ty_rows( ( status = 'Z' mail = 'zz_not_a_domain_9' )
+                                   ( status = 'Z' mail = 'zz_not_a_domain_9' ) ).
+
+    DATA(lt_first)  = lo_validator->validate( lt_rows ).
+    DATA(lt_second) = lo_validator->validate( lt_rows ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 4 act = lines( lt_first )
+        msg = 'expected one domain and one checktable finding per row' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = lines( lt_first ) act = lines( lt_second )
+        msg = 'second validate must return identical findings' ).
+
+    lo_validator->clear_caches( ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = lines( lt_first ) act = lines( lo_validator->validate( lt_rows ) )
+        msg = 'validate after clear_caches must return identical findings' ).
+  ENDMETHOD.
+
+
+  METHOD alpha_element_valid.
+    " VBELN carries conversion exit ALPHA: the external form passes with
+    " the exit executed (padded to the internal form), no fixed values
+    " or check table apply
+    cl_abap_unit_assert=>assert_equals(
+        exp = abap_true
+        act = zcl_adv_validator=>check_value_by_element(
+                  iv_value = '123' iv_rollname = 'VBELN' )
+        msg = 'external VBELN form should pass ALPHA' ).
   ENDMETHOD.
 
 ENDCLASS.

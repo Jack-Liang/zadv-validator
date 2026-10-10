@@ -114,6 +114,10 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       "! method parameters cannot use inline LENGTH -> named type
       ty_domname TYPE c LENGTH 30,
 
+      "! SE91 message class id and number for build_msg
+      ty_msgid TYPE c LENGTH 20,
+      ty_msgnr TYPE n LENGTH 3,
+
       BEGIN OF ty_field,
         fieldname    TYPE fieldname,
         synthetic    TYPE abap_bool,
@@ -155,7 +159,33 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         name   TYPE convexit,
         exists TYPE abap_bool,
       END OF ty_convexit,
-      ty_convexits TYPE HASHED TABLE OF ty_convexit WITH UNIQUE KEY name.
+      ty_convexits TYPE HASHED TABLE OF ty_convexit WITH UNIQUE KEY name,
+
+      "! internal-format values to look up in one check table column,
+      "! deduplicated (hashed) and as index table for chunked iteration
+      ty_values    TYPE STANDARD TABLE OF string WITH EMPTY KEY,
+      ty_value_set TYPE HASHED TABLE OF string WITH UNIQUE KEY table_line,
+
+      BEGIN OF ty_ctab_want,
+        tabname TYPE tabname,
+        field   TYPE fieldname,
+        values  TYPE ty_value_set,
+      END OF ty_ctab_want,
+      ty_ctab_wants TYPE SORTED TABLE OF ty_ctab_want
+                       WITH UNIQUE KEY tabname field,
+
+      "! elementary target of the dynamic single column batch SELECT;
+      "! C -> string strips trailing blanks so found values compare
+      "! cleanly with the searched internal-format values
+      ty_ctab_val  TYPE c LENGTH 1333,
+      ty_ctab_vals TYPE STANDARD TABLE OF ty_ctab_val WITH EMPTY KEY.
+
+    CONSTANTS:
+      "! SE91 message class carrying the finding texts (SE63 translatable)
+      c_msgid TYPE ty_msgid VALUE 'ZADV_VALIDATOR',
+      "! values per dynamic IN( ) batch: small enough for any database
+      "! IN list and statement size limit
+      c_in_chunk TYPE i VALUE 100.
 
     DATA:
       mt_rules          TYPE ty_rules,
@@ -184,6 +214,28 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
                   iv_field         TYPE fieldname
                   iv_value         TYPE string
         RETURNING VALUE(rv_ok)     TYPE abap_bool,
+
+      "! display value -> internal comparison format: conversion exit
+      "! applied, upper case unless the effective domain allows lowercase
+      internal_value
+        IMPORTING is_field      TYPE ty_field
+                  iv_disp       TYPE string
+        RETURNING VALUE(rv_val) TYPE string,
+
+      "! collect the distinct check-table lookups of all rows and fill
+      "! the lookup cache with chunked IN( ) selects, so the row loop
+      "! below fires no per-value SELECT COUNT( * )
+      prefetch_checktables
+        IMPORTING it_data   TYPE ANY TABLE
+                  it_fields TYPE ty_fields,
+
+      "! look up it_values of one check table column in chunks of
+      "! c_in_chunk and cache hit/miss per value; on dynamic SQL errors
+      "! nothing is cached and the per-value fallback applies
+      prefetch_ctab_group
+        IMPORTING iv_table  TYPE tabname
+                  iv_field  TYPE fieldname
+                  it_values TYPE ty_value_set,
 
       check_date
         IMPORTING iv_date          TYPE string
@@ -214,7 +266,16 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         IMPORTING iv_value     TYPE clike
                   iv_rollname  TYPE clike
         EXPORTING es_finding   TYPE ty_finding
-        RETURNING VALUE(rv_ok) TYPE abap_bool.
+        RETURNING VALUE(rv_ok) TYPE abap_bool,
+
+      "! finding message text from the SE91 message class; operands for
+      "! unused placeholders are supplied blank
+      build_msg
+        IMPORTING iv_nr          TYPE ty_msgnr
+                  iv_a           TYPE string OPTIONAL
+                  iv_b           TYPE string OPTIONAL
+                  iv_c           TYPE string OPTIONAL
+        RETURNING VALUE(rv_text) TYPE string.
 
 ENDCLASS.
 
@@ -239,7 +300,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     IF lo_line->kind <> cl_abap_typedescr=>kind_struct.
       APPEND VALUE #( row = 0 fieldname = '-'
                       check_type = c_check-structure
-                      message   = 'Table line type is not a structure' )
+                      message   = build_msg( iv_nr = '001' ) )
              TO rt_findings.
       RETURN.
     ENDIF.
@@ -265,7 +326,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         IF sy-subrc <> 0.
           APPEND VALUE #( row = 0 fieldname = lv_only
                           check_type = c_check-structure
-                          message   = |Only field { lv_only } does not exist in the structure| )
+                          message   = build_msg( iv_nr = '002'
+                                                  iv_a  = lv_only ) )
                  TO rt_findings.
         ENDIF.
       ENDLOOP.
@@ -289,13 +351,19 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       IF sy-subrc <> 0.
         APPEND VALUE #( row = 0 fieldname = <fs_chk>-fieldname
                         check_type = c_check-structure
-                        message   = |Rule field { <fs_chk>-fieldname } does not exist in the structure| )
+                        message   = build_msg( iv_nr = '003'
+                                                iv_a  = <fs_chk>-fieldname ) )
                TO rt_findings.
       ENDIF.
     ENDLOOP.
 
     " ---------------------------------------------------------------------
-    " 4) row loop
+    " 4) prefill the check-table lookup cache in chunked batches
+    " ---------------------------------------------------------------------
+    prefetch_checktables( it_data = it_data it_fields = lt_fields ).
+
+    " ---------------------------------------------------------------------
+    " 5) row loop
     " ---------------------------------------------------------------------
     LOOP AT it_data ASSIGNING <row>.
       lv_row = lv_row + 1.
@@ -314,7 +382,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
           APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                           value = lv_disp
                           check_type = c_check-required
-                          message = |Field { <fs_field>-fieldname } is initial (required)| )
+                          message = build_msg( iv_nr = '004'
+                                               iv_a  = <fs_field>-fieldname ) )
                  TO rt_findings.
           CONTINUE.
         ENDIF.
@@ -324,11 +393,6 @@ CLASS zcl_adv_validator IMPLEMENTATION.
           CONTINUE.
         ENDIF.
 
-        " comparison value in internal format (conversion exit) ...........
-        DATA(lv_int) = to_internal(
-                         iv_convexit = <fs_field>-convexit
-                         iv_value    = lv_disp ).
-
         " format checks ....................................................
         CASE <fs_field>-datatype.
           WHEN 'DATS'.
@@ -336,7 +400,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
               APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                               value = lv_disp
                               check_type = c_check-date
-                              message = |Value '{ lv_disp }' is not a valid date (expected YYYYMMDD)| )
+                              message = build_msg( iv_nr = '005'
+                                                   iv_a  = lv_disp ) )
                      TO rt_findings.
               CONTINUE.
             ENDIF.
@@ -345,7 +410,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
               APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                               value = lv_disp
                               check_type = c_check-time
-                              message = |Value '{ lv_disp }' is not a valid time (expected HHMMSS)| )
+                              message = build_msg( iv_nr = '006'
+                                                   iv_a  = lv_disp ) )
                      TO rt_findings.
               CONTINUE.
             ENDIF.
@@ -354,7 +420,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
               APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                               value = lv_disp
                               check_type = c_check-numc
-                              message = |Value '{ lv_disp }' contains characters other than digits| )
+                              message = build_msg( iv_nr = '007'
+                                                   iv_a  = lv_disp ) )
                      TO rt_findings.
               CONTINUE.
             ENDIF.
@@ -365,22 +432,14 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                               THEN <fs_field>-rule_domname
                               ELSE <fs_field>-domname ).
 
-        DATA lv_lowercase        TYPE abap_bool VALUE abap_false.
-        DATA lv_has_fixed_values TYPE abap_bool VALUE abap_false.
+        " comparison value in internal format (conversion exit + case)
+        DATA(lv_int) = internal_value( is_field = <fs_field>
+                                       iv_disp  = lv_disp ).
 
+        DATA lv_has_fixed_values TYPE abap_bool VALUE abap_false.
         IF lv_dom IS NOT INITIAL.
           DATA(ls_dom) = get_domain( lv_dom ).
-          lv_lowercase        = ls_dom-lowercase.
           lv_has_fixed_values = xsdbool( ls_dom-values IS NOT INITIAL ).
-        ELSE.
-          lv_lowercase        = abap_false.
-          lv_has_fixed_values = abap_false.
-        ENDIF.
-
-        " character values are compared case-insensitively (upper) unless
-        " the domain allows lowercase; digits pass through unchanged
-        IF lv_lowercase = abap_false.
-          TRANSLATE lv_int TO UPPER CASE.
         ENDIF.
 
         IF lv_has_fixed_values = abap_true AND
@@ -388,7 +447,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
           APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                           value = lv_disp object = lv_dom
                           check_type = c_check-domain
-                          message = |Value '{ lv_disp }' is not within the fixed values of domain { lv_dom }| )
+                          message = build_msg( iv_nr = '008'
+                                               iv_a  = lv_disp
+                                               iv_b  = lv_dom ) )
                  TO rt_findings.
           CONTINUE.
         ENDIF.
@@ -406,7 +467,10 @@ CLASS zcl_adv_validator IMPLEMENTATION.
           APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                           value = lv_disp object = |{ lv_ctab }/{ lv_cfld }|
                           check_type = c_check-checktable
-                          message = |Value '{ lv_disp }' does not exist in check table { lv_ctab } (field { lv_cfld })| )
+                          message = build_msg( iv_nr = '009'
+                                               iv_a  = lv_disp
+                                               iv_b  = lv_ctab
+                                               iv_c  = lv_cfld ) )
                  TO rt_findings.
           CONTINUE.
         ENDIF.
@@ -421,7 +485,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
             APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
                             value = lv_disp object = <fs_field>-regex
                             check_type = c_check-regex
-                            message = |Value '{ lv_disp }' does not match the required pattern| )
+                            message = build_msg( iv_nr = '010'
+                                                 iv_a  = lv_disp ) )
                    TO rt_findings.
             CONTINUE.
           ENDIF.
@@ -502,7 +567,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       es_finding-row        = 0.
       es_finding-fieldname  = CONV fieldname( lv_field ).
       es_finding-check_type = c_check-structure.
-      es_finding-message    = |{ lv_tabname } is not a DDIC table or structure|.
+      es_finding-message    = build_msg( iv_nr = '012' iv_a = lv_tabname ).
       RETURN.
     ENDIF.
 
@@ -517,7 +582,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       es_finding-row        = 0.
       es_finding-fieldname  = CONV fieldname( lv_field ).
       es_finding-check_type = c_check-structure.
-      es_finding-message    = |Field { lv_field } not found in { lv_tabname }|.
+      es_finding-message    = build_msg( iv_nr = '013'
+                                         iv_a  = lv_field
+                                         iv_b  = lv_tabname ).
       RETURN.
     ENDIF.
 
@@ -525,7 +592,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       es_finding-row        = 0.
       es_finding-fieldname  = CONV fieldname( lv_field ).
       es_finding-check_type = c_check-structure.
-      es_finding-message    = |Field { lv_field } of { lv_tabname } has no data element|.
+      es_finding-message    = build_msg( iv_nr = '014'
+                                         iv_a  = lv_field
+                                         iv_b  = lv_tabname ).
       RETURN.
     ENDIF.
 
@@ -555,7 +624,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       es_finding-row        = 0.
       es_finding-fieldname  = CONV fieldname( lv_rollname ).
       es_finding-check_type = c_check-structure.
-      es_finding-message    = |{ lv_rollname } is not a DDIC data element|.
+      es_finding-message    = build_msg( iv_nr = '011' iv_a = lv_rollname ).
       RETURN.
     ENDIF.
 
@@ -688,6 +757,23 @@ CLASS zcl_adv_validator IMPLEMENTATION.
   ENDMETHOD.
 
 
+  METHOD internal_value.
+    " conversion exit first, then case folding: character values are
+    " compared case-insensitively (upper) unless the effective domain
+    " allows lowercase; digits pass through unchanged
+    rv_val = to_internal( iv_convexit = is_field-convexit
+                          iv_value    = iv_disp ).
+
+    DATA(lv_dom) = COND #( WHEN is_field-rule_domname IS NOT INITIAL
+                           THEN is_field-rule_domname
+                           ELSE is_field-domname ).
+
+    IF lv_dom IS INITIAL OR get_domain( lv_dom )-lowercase = abap_false.
+      TRANSLATE rv_val TO UPPER CASE.
+    ENDIF.
+  ENDMETHOD.
+
+
   METHOD get_domain.
     READ TABLE mt_domains INTO rs_domain WITH TABLE KEY domname = iv_domname.
     IF sy-subrc = 0.
@@ -771,6 +857,120 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
     INSERT VALUE #( tabname = iv_table field = iv_field value = iv_value
                     found   = rv_ok ) INTO TABLE mt_ctab_hits.
+  ENDMETHOD.
+
+
+  METHOD prefetch_checktables.
+
+    DATA lt_wants TYPE ty_ctab_wants.
+
+    LOOP AT it_fields ASSIGNING FIELD-SYMBOL(<fs_pfield>).
+
+      DATA(lv_ctab) = COND #( WHEN <fs_pfield>-rule_ctab IS NOT INITIAL
+                              THEN <fs_pfield>-rule_ctab
+                              ELSE <fs_pfield>-checktable ).
+      CHECK lv_ctab IS NOT INITIAL.
+      DATA(lv_cfld) = COND #( WHEN <fs_pfield>-rule_cfield IS NOT INITIAL
+                              THEN <fs_pfield>-rule_cfield
+                              ELSE <fs_pfield>-fieldname ).
+
+      LOOP AT it_data ASSIGNING FIELD-SYMBOL(<fs_prow>).
+        ASSIGN COMPONENT <fs_pfield>-fieldname OF STRUCTURE <fs_prow>
+               TO FIELD-SYMBOL(<fs_pval>).
+        IF sy-subrc <> 0 OR <fs_pval> IS INITIAL.
+          CONTINUE.
+        ENDIF.
+
+        DATA(lv_int) = internal_value( is_field = <fs_pfield>
+                                       iv_disp  = CONV string( <fs_pval> ) ).
+
+        " already known from an earlier validate( ) on this instance?
+        READ TABLE mt_ctab_hits TRANSPORTING NO FIELDS
+             WITH TABLE KEY tabname = lv_ctab
+                           field   = lv_cfld
+                           value   = lv_int.
+        IF sy-subrc = 0.
+          CONTINUE.
+        ENDIF.
+
+        READ TABLE lt_wants ASSIGNING FIELD-SYMBOL(<fs_want>)
+             WITH TABLE KEY tabname = lv_ctab field = lv_cfld.
+        IF sy-subrc <> 0.
+          INSERT VALUE #( tabname = lv_ctab field = lv_cfld )
+                 INTO TABLE lt_wants ASSIGNING <fs_want>.
+        ENDIF.
+        INSERT lv_int INTO TABLE <fs_want>-values.
+      ENDLOOP.
+    ENDLOOP.
+
+    LOOP AT lt_wants ASSIGNING <fs_want>.
+      prefetch_ctab_group( iv_table  = <fs_want>-tabname
+                           iv_field  = <fs_want>-field
+                           it_values = <fs_want>-values ).
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD prefetch_ctab_group.
+
+    DATA: lt_found     TYPE ty_ctab_vals,
+          lt_found_set TYPE ty_value_set,
+          lv_off       TYPE i,
+          lv_from      TYPE i,
+          lv_end       TYPE i,
+          lv_in        TYPE string,
+          lv_lit       TYPE string,
+          lv_where     TYPE string.
+
+    DATA(lv_fld)  = to_upper( iv_field ).
+    DATA(lt_vals) = VALUE ty_values( ( LINES OF it_values ) ).
+
+    WHILE lv_off < lines( lt_vals ).
+
+      lv_from = lv_off + 1.
+      lv_end  = nmin( val1 = lv_off + c_in_chunk
+                      val2 = lines( lt_vals ) ).
+
+      CLEAR lv_in.
+      LOOP AT lt_vals FROM lv_from TO lv_end INTO DATA(lv_val).
+        lv_lit = replace( val = lv_val sub = `'` with = `''` occ = 0 ).
+        IF lv_in IS NOT INITIAL.
+          lv_in = lv_in && ','.
+        ENDIF.
+        lv_in = lv_in && |'{ lv_lit }'|.
+      ENDLOOP.
+      lv_where = |{ lv_fld } IN ({ lv_in })|.
+
+      TRY.
+          CLEAR: lt_found, lt_found_set.
+
+          " fully classic Open SQL on purpose, see check_table
+          SELECT DISTINCT (lv_fld) FROM (iv_table)
+            INTO TABLE lt_found
+            WHERE (lv_where).
+
+          LOOP AT lt_found INTO DATA(lv_hit).
+            INSERT CONV string( lv_hit ) INTO TABLE lt_found_set.
+          ENDLOOP.
+
+          LOOP AT lt_vals FROM lv_from TO lv_end INTO lv_val.
+            INSERT VALUE #( tabname = iv_table
+                            field   = iv_field
+                            value   = lv_val
+                            found   = xsdbool( line_exists(
+                                        lt_found_set[ table_line = lv_val ] ) ) )
+                   INTO TABLE mt_ctab_hits.
+          ENDLOOP.
+
+        CATCH cx_sy_dynamic_osql_error.
+          " unreadable check table (generated, view only, ...): cache
+          " nothing here, the per-value fallback in the row loop keeps
+          " the lenient behaviour
+          RETURN.
+      ENDTRY.
+
+      lv_off = lv_end.
+    ENDWHILE.
   ENDMETHOD.
 
 
@@ -864,6 +1064,15 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
     INSERT VALUE #( name = iv_convexit exists = rv_ok )
            INTO TABLE mt_convexits.
+  ENDMETHOD.
+
+
+  METHOD build_msg.
+    " TYPE 'S' with INTO only builds the text, nothing is displayed or
+    " logged; surplus WITH operands are allowed, missing ones would fail
+    MESSAGE ID c_msgid TYPE 'S' NUMBER iv_nr
+            WITH iv_a iv_b iv_c
+            INTO rv_text.
   ENDMETHOD.
 
 ENDCLASS.

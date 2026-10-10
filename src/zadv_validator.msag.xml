@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<abapGit version="v1.0.0" serializer="LCL_OBJECT_MSAG" serializer_version="v1.0.0">
+ <asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
+  <asx:values>
+   <T100A>
+    <ARBGB>ZADV_VALIDATOR</ARBGB>
+    <MASTERLANG>E</MASTERLANG>
+    <STEXT>Validation findings of ZCL_ADV_VALIDATOR</STEXT>
+   </T100A>
+   <T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>001</MSGNR>
+     <TEXT>Table line type is not a structure</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>002</MSGNR>
+     <TEXT>Only field &amp;1 does not exist in the structure</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>003</MSGNR>
+     <TEXT>Rule field &amp;1 does not exist in the structure</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>004</MSGNR>
+     <TEXT>Field &amp;1 is initial (required)</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>005</MSGNR>
+     <TEXT>Value '&amp;1' is not a valid date (expected YYYYMMDD)</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>006</MSGNR>
+     <TEXT>Value '&amp;1' is not a valid time (expected HHMMSS)</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>007</MSGNR>
+     <TEXT>Value '&amp;1' contains characters other than digits</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>008</MSGNR>
+     <TEXT>Value '&amp;1' is not within the fixed values of domain &amp;2</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>009</MSGNR>
+     <TEXT>Value '&amp;1' does not exist in check table &amp;2 (field &amp;3)</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>010</MSGNR>
+     <TEXT>Value '&amp;1' does not match the required pattern</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>011</MSGNR>
+     <TEXT>&amp;1 is not a DDIC data element</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>012</MSGNR>
+     <TEXT>&amp;1 is not a DDIC table or structure</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>013</MSGNR>
+     <TEXT>Field &amp;1 not found in &amp;2</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>014</MSGNR>
+     <TEXT>Field &amp;1 of &amp;2 has no data element</TEXT>
+    </T100>
+   </T100>
+  </asx:values>
+ </asx:abap>
+</abapGit>

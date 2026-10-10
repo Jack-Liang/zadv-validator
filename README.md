@@ -15,7 +15,7 @@
 | 检查 | 来源 | 说明 |
 |---|---|---|
 | 域固定值 `DOMAIN` | 自动（DD07L/DD01L） | 支持单值与区间；尊重域的小写标志 |
-| 检查表 `CHECKTABLE` | 自动（DFIES-CHECKTABLE）或规则指定 | 动态 `SELECT COUNT(*)`，结果缓存；检查表字段同名假设可用 `checkfield` 覆盖 |
+| 检查表 `CHECKTABLE` | 自动（DFIES-CHECKTABLE）或规则指定 | 行循环前按列收集去重值，分批 `WHERE field IN (...)` 预填缓存（每批 100 值）；检查表字段同名假设可用 `checkfield` 覆盖 |
 | 日期格式 `DATE` | 自动（DATS） | YYYYMMDD，含月份天数与闰年 |
 | 时间格式 `TIME` | 自动（TIMS） | HHMMSS |
 | 数字串 `NUMC` | 自动（NUMC） | 只允许数字 |
@@ -29,7 +29,8 @@
 ## 安装（abapGit）
 
 1. SE80 / abapGit（`ZABAPGIT`）→ *Link abapGit Repository*，输入本仓库地址。
-2. 包名建议 `ZADV_VALIDATOR`，拉取后激活。
+2. 包名建议 `ZADV_VALIDATOR`，拉取后激活。包内含 SE91 消息类
+   `ZADV_VALIDATOR`（finding 文本来源），随包一起拉取，整包激活即可。
 3. 依赖：ABAP 7.40 SP08+（on-prem；直接访问 DD07L/DD01L/TFDIR 并使用动态 SQL，
    不适用于 ABAP Cloud / Steampunk）。
 
@@ -110,18 +111,22 @@ DATA(lv_ok) = zcl_adv_validator=>check_value_by_field(
 | `value` | 原始输入值（外部格式，直接可读） |
 | `check_type` | STRUCTURE / REQUIRED / DOMAIN / CHECKTABLE / DATE / TIME / NUMC / REGEX |
 | `object` | 涉及对象：域名 或 `检查表/字段` 或 正则 |
-| `message` | 英文消息文本（调用方可用前 5 个字段自建中文消息） |
+| `message` | 消息文本，取自 SE91 消息类 `ZADV_VALIDATOR`（001–014），可 SE63 翻译；调用方也可用前 5 个字段自建消息。注意占位符最长 50 字符，超长 `value` 会被截断，完整值请看 `value` 字段 |
 
 ## 工作原理
 
 1. RTTI 解析内表行结构，`GET_DDIC_FIELD_LIST( )` 取 DFIES 元数据
    （域名、检查表、转换出口、数据类型）；混合结构（含 string 等非 DDIC
    字段）自动回退为逐组件解析，非 DDIC 字段跳过（可用规则接管）。
-2. 逐行逐字段：required → 初始值放行 → 转换出口 → 格式检查 → 域固定值
-   → 检查表 → 正则；每个字段每行只报第一个错误，避免错误级联噪音。
-3. 缓存：域固定值（按域）、检查表命中（按 表+字段+值）、转换出口存在性
-   （按出口名）均为实例级缓存；同一实例反复校验大批量数据时，
-   同检查表字段的不同取值仍会逐个查库（每个不同值一次 `SELECT COUNT`）。
+2. 检查表批量预取：行循环前，按"检查表/字段"分组收集全表去重后的内部格式值，
+   每批 100 个值用 `SELECT DISTINCT ... WHERE field IN (...)` 一次性查库并
+   预填缓存——大表导入从"每个不同值一次往返"降为"每列每 100 个不同值一次"。
+   动态 SQL 失败（生成表/视图等不可读）时不缓存，逐值回退到宽容模式。
+3. 逐行逐字段：required → 初始值放行 → 转换出口+大小写归一 → 格式检查
+   → 域固定值 → 检查表 → 正则；每个字段每行只报第一个错误，
+   避免错误级联噪音。此时检查表查询几乎全部命中缓存，不再逐值查库。
+4. 缓存：域固定值（按域）、检查表命中（按 表+字段+值）、转换出口存在性
+   （按出口名）均为实例级缓存；`clear_caches( )` 可在定制数据变更后清空。
 
 ## 设计取舍与限制
 
@@ -133,8 +138,9 @@ DATA(lv_ok) = zcl_adv_validator=>check_value_by_field(
   长值域本库无能为力（与 SE11 行为一致）。
 - **自引用跳过**：字段检查表 = 上传结构本身（如基于 T001 的结构校验 BUKRS）
   会被跳过，避免自己查自己。
-- **性能**：值基数高的大批量数据建议先 `SORT + DELETE ADJACENT DUPLICATES`
-  预去重，或分批调用；域值与转换出口检查无此问题（纯内存）。
+- **性能**：检查表查询已按列分批（每批 100 个去重值）；值基数极高
+  （单列不同值数以万计）时可再 `SORT + DELETE ADJACENT DUPLICATES`
+  预去重或分批调用；域值与转换出口检查无此问题（纯内存）。
 - **不走 `DDUT_INPUT_CHECK`**：直接读 DD07L + 动态 SQL 可控性更好、可缓存、
   无 FM 签名依赖；需要其外键级语义时可替换 `check_table` 实现。
 
@@ -142,10 +148,13 @@ DATA(lv_ok) = zcl_adv_validator=>check_value_by_field(
 
 ```
 CHANGELOG.md                             更新日志
+abaplint.json                            abaplint 基础规则（CI 静态检查）
+.github/workflows/abaplint.yml           GitHub Actions：push/PR 自动跑 abaplint
 src/
   package.devc.xml                        包 ZADV_VALIDATOR
+  zadv_validator.msag.xml                 SE91 消息类 ZADV_VALIDATOR（001–014）
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，无接口依赖）
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（17 个用例）
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（21 个用例）
   zadv_demo.prog.abap                     演示报表
 ```
 
@@ -154,16 +163,19 @@ src/
 类 `ZCL_ADV_VALIDATOR` 自带 ABAP Unit（SE80 → 类 → 运行，或 ADT），
 覆盖：合法行零误报、非法日期/时间/域值、正则与必填规则、规则字段缺失、
 非结构化表拒绝、列过滤（only/exclude 及白名单字段名纠错）、单值校验
-（check_value_by_element/by_field）。检查表类用例依赖系统主数据，
-故在 demo 中演示而非单测。
+（check_value_by_element/by_field）、检查表规则路由与批量预取
+（以 DD07L/DOMNAME 为检查表，不依赖系统主数据）、缺失检查表的宽容回退、
+缓存幂等（重复 validate 与 clear_caches 后结果一致）、ALPHA 转换出口
+（VBELN）。依赖系统主数据的场景（真实检查表 T001 等）仍以 demo 演示为主；
+小写域、区间型域值因缺少跨版本稳定的样例域，暂未纳入单测。
 
 ## 路线图
 
-### v0.3（近期：性能与工程化）
-- [ ] **检查表批量查询**：按列收集去重值后 `WHERE field IN (...)` 分批查询，替代逐值 `SELECT COUNT(*)`——大表导入的主要性能瓶颈
-- [ ] **消息类化（SE91）**：错误文本迁入消息类，支持 SE63 翻译（当前硬编码英文）
-- [ ] 单测补强：转换出口（ALPHA）、小写域、区间型域值、缓存幂等、规则覆盖 DDIC
-- [ ] abaplint 基础配置（CI 静态检查）
+### v0.3（性能与工程化）——已完成
+- [x] **检查表批量查询**：按列收集去重值后 `WHERE field IN (...)` 分批查询（每批 100 值）预填缓存，替代逐值 `SELECT COUNT(*)`；动态 SQL 失败自动回退逐值宽容模式
+- [x] **消息类化（SE91）**：错误文本迁入消息类 `ZADV_VALIDATOR`（001–014），支持 SE63 翻译
+- [x] 单测补强：转换出口（ALPHA/VBELN）、缓存幂等、规则路由检查表（checktable/checkfield 覆盖）、缺失检查表宽容回退（小写域、区间型域值缺跨版本稳定样例域，挪至 v1.0）
+- [x] abaplint 基础配置 + GitHub Actions CI（`.github/workflows/abaplint.yml`）
 
 ### v1.0（功能完整版）
 - [ ] **完整外键映射**：读 DD05S，支持非同名检查表字段与组合键（多字段外键）
@@ -172,13 +184,14 @@ src/
 - [ ] finding 增强：severity（E/W/I）、规则 ID；BAL 应用日志与 ALV 输出 helper
 - [ ] CURR/QUAN 参照校验：货币列参照 TCURC、单位列参照 T006（DFIES-REFTABLE/REFFIELD 自动识别）
 - [ ] 暂存 STRING 字段截断预检（超长值入库前预警）
+- [ ] 单测补遗：小写域、区间型域值（待选定跨版本稳定的样例域，或以 CDS/临时 DDIC 方式自建）
 - [ ] README 英文版
 
 ### v2.0+（生态与场景）
 - [ ] 规则配置表：校验规则存自定义表，顾问可维护、可传输，免改代码
 - [ ] Excel 上传端到端示例（abap2xlsx → 暂存表 → 校验 → ALV）
 - [ ] ABAP Cloud 适配可行性调研（以 released 对象替代 DD07L/DD01L/TFDIR 直读与动态 SQL）
-- [ ] GitHub Actions：abaplint + abapGit trial 系统自动激活与单测
+- [ ] GitHub Actions 扩展：abapGit trial 系统自动激活与 ABAP Unit（abaplint CI 已就绪）
 - [ ] 大表分批/并行校验
 
 明确不做：7.02 及以下语法降级（维护成本大于收益）、多包拆分、替代 RAP 校验。
