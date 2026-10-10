@@ -88,6 +88,40 @@ MARA、货币参照 VBAK），DDIC 表在**运行期解析**，缺对象的系�
 （不报错、不崩溃）。确定性的校验（域固定值 AS4LOCAL、日期格式、正则、必填）
 在任何系统上都能看到效果。
 
+## 用法总览（API）
+
+一个校验器实例 = 一次导入场景。注册规则/插件/过滤 → `validate( )` 一次 →
+按 `severity` 分流处理 findings；四个静态 helper 不需要实例，随取随用。
+
+**实例方法（`NEW zcl_adv_validator( )` 之后链式配置）**
+
+| 方法 | 用途 |
+|---|---|
+| `validate( it_data )` | 校验任意内表，返回 `ty_findings`（每条含行号/字段/原值/类别/消息/severity/rule_id） |
+| `add_rule( )` / `add_rules( )` / `clear_rules( )` | 列级显式规则：required / regex / checktable+checkfield / domname / severity / rule_id（无 DDIC 类型的字段靠它接管） |
+| `add_compare_rule( )` / `add_compare_rules( )` / `clear_compare_rules( )` | 行级跨字段比较：`field operator other`（EQ/NE/LT/LE/GT/GE），如 DATE_FROM <= DATE_TO；初始操作数跳过 |
+| `add_unique_rule( )` / `add_unique_rules( )` / `clear_unique_rules( )` | 表级查重：字段组合全表唯一（`fields` 空 = 仅 `field` 单字段）；首次放行、后续报错并注明首次行号 |
+| `add_column_check( )` / `clear_column_checks( )` | 注册插件（实现 `ZIF_ADV_COLUMN_CHECK` 的类），自带 ok/文本/severity/rule_id，收到整行引用 |
+| `only_fields( )` / `exclude_fields( )` | 列过滤（白名单优先，整体替换，传空重置） |
+| `clear_caches( )` | 清空域值/检查表/转换出口缓存（定制数据变更后用） |
+
+**静态方法（无需实例）**
+
+| 方法 | 用途 |
+|---|---|
+| `check_value_by_element( )` / `check_value_by_field( )` | 单值校验：按数据元素或表字段取 DDIC 定义，返回真假 + finding 原因 |
+| `precheck_truncation( )` | 截断预检：string 暂存表 vs 目标 DDIC 结构同名列长度，超长预警（缺省 W） |
+| `display_findings( )` | findings 进 SALV（优化列宽 + 标题；无 SALV 回退经典列表） |
+| `log_findings( )` | findings 写 BAL 应用日志（SLG1 查看；对象先在 SLG0 注册） |
+
+**关键类型与常量**：`ty_finding` / `ty_rule` / `ty_compare_rule` /
+`ty_unique_rule`（结构见上文各章节与 SE11 风格注释）；类别常量
+`c_check-*`（STRUCTURE/REQUIRED/DOMAIN/CHECKTABLE/DATE/TIME/NUMC/
+REGEX/PLUGIN/COMPARE/UNIQUE/TRUNCATION）；严重度常量 `c_severity-error/
+warning/info`；字段名列表 `ty_fieldnames`（string 行类型，构造用反引号
+字面量）。库版本等元数据在 `ZIF_ADV_METADATA`（`c_version` 等）。
+
+
 ## 列过滤
 
 默认校验 DDIC 能推导出的全部列。可以限定范围：

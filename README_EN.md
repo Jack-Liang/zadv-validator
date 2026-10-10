@@ -105,6 +105,43 @@ lenient mode lets the value pass (no error, no crash). Deterministic
 checks (domain fixed values AS4LOCAL, date format, regex, required)
 show their effect on every system.
 
+## Usage overview (API)
+
+One validator instance = one import scenario. Register rules/plugins/
+filters → one `validate( )` → branch on `severity`; the four static
+helpers need no instance, use them where they fit.
+
+**Instance methods (chain after `NEW zcl_adv_validator( )`)**
+
+| Method | Purpose |
+|---|---|
+| `validate( it_data )` | validate any internal table, returns `ty_findings` (each with row/field/value/check_type/message/severity/rule_id) |
+| `add_rule( )` / `add_rules( )` / `clear_rules( )` | column level explicit rules: required / regex / checktable+checkfield / domname / severity / rule_id (how fields without DDIC types get covered) |
+| `add_compare_rule( )` / `add_compare_rules( )` / `clear_compare_rules( )` | row level cross field comparison: `field operator other` (EQ/NE/LT/LE/GT/GE), e.g. DATE_FROM <= DATE_TO; initial operands are skipped |
+| `add_unique_rule( )` / `add_unique_rules( )` / `clear_unique_rules( )` | table level duplicates: a field combination stays unique (empty `fields` = just `field`); first occurrence passes, later ones are reported with the first row |
+| `add_column_check( )` / `clear_column_checks( )` | register a plugin (class implementing `ZIF_ADV_COLUMN_CHECK`): decides ok/text/severity/rule_id itself, receives the whole row |
+| `only_fields( )` / `exclude_fields( )` | column filters (whitelist wins, replaces the list as a whole, empty resets) |
+| `clear_caches( )` | discard domain/check table/conversion exit caches (after customizing changes) |
+
+**Static methods (no instance needed)**
+
+| Method | Purpose |
+|---|---|
+| `check_value_by_element( )` / `check_value_by_field( )` | single value check by data element or table field, returns ok + a finding explaining why not |
+| `precheck_truncation( )` | truncation pre-check: string staging table vs the same name columns of the target DDIC structure (defaults to W) |
+| `display_findings( )` | findings in a SALV (optimized columns + header; classic list fallback without SALV) |
+| `log_findings( )` | findings into a BAL application log (view with SLG1; register the object in SLG0 first) |
+
+**Key types and constants**: `ty_finding` / `ty_rule` / `ty_compare_rule`
+/ `ty_unique_rule` (structures shown in the chapters above and
+documented as SE11 style comments); category constants `c_check-*`
+(STRUCTURE/REQUIRED/DOMAIN/CHECKTABLE/DATE/TIME/NUMC/REGEX/PLUGIN/
+COMPARE/UNIQUE/TRUNCATION); severity constants `c_severity-error/
+warning/info`; the field name list `ty_fieldnames` (string row type,
+populate with backtick literals). Library metadata lives in
+`ZIF_ADV_METADATA` (`c_version` and friends).
+
+
 ## Column filters
 
 By default every column the DDIC can describe is validated. Narrow it
