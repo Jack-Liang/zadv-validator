@@ -1416,11 +1416,13 @@ ENDCLASS.
 "* raises inside the dynamic SELECT and the lenient catch turns it into
 "* "0 rules", which the empty-scenario test cannot tell apart. This
 "* class writes two rows of a dedicated scenario, loads and validates
-"* them, then rolls the LUW back. Own risk level on purpose: transient
-"* writes of persistent data (uncommitted, invisible to other
-"* sessions, ROLLBACK WORK before any assertion) - CRITICAL, not
-"* DANGEROUS: no repository or customizing objects are touched, and
-"* DANGEROUS exceeds the upper limit of the usual run configurations
+"* them, then leaves the LUW to the framework (database rollback after
+"* every test - no explicit ROLLBACK WORK, some releases reject it
+"* inside test methods with a class level runtime error). Own risk
+"* level on purpose: transient writes of persistent data (uncommitted,
+"* invisible to other sessions) - CRITICAL, not DANGEROUS: no
+"* repository or customizing objects are touched, and DANGEROUS
+"* exceeds the upper limit of the usual run configurations
 CLASS ltcl_db_rules DEFINITION FINAL
   FOR TESTING
   RISK LEVEL CRITICAL
@@ -1469,13 +1471,17 @@ CLASS ltcl_db_rules IMPLEMENTATION.
       ( scenario = lc_scenario rule_id = 'R2' rule_type = 'COMPARE'
         fieldname = 'DATE_FROM' operator = 'LE' other_field = 'DATE_TO' ) ).
 
+    " no explicit ROLLBACK WORK anywhere on purpose: some releases
+    " reject ROLLBACK WORK inside test methods with a class level
+    " runtime error, the ABAP Unit framework rolls the database back
+    " after every test, and uncommitted rows vanish with the session
+    " otherwise - the cleanup is guaranteed without it
     TRY.
         " DELETE FROM dbtab: without FROM the parser reads the internal
         " table variant and fails on WHERE
         DELETE FROM zadv_rules WHERE scenario = lc_scenario.
         INSERT zadv_rules FROM TABLE lt_seed.
       CATCH cx_root INTO DATA(lx_dml) ##NO_TEXT.
-        ROLLBACK WORK.
         " assert_fail does not exist on 7.40 SP08 - an always false
         " assert_equals carries the diagnostic message instead
         cl_abap_unit_assert=>assert_equals(
@@ -1486,7 +1492,6 @@ CLASS ltcl_db_rules IMPLEMENTATION.
     ENDTRY.
 
     IF sy-subrc <> 0.
-      ROLLBACK WORK.
       cl_abap_unit_assert=>assert_equals(
           exp = abap_true
           act = abap_false
@@ -1505,8 +1510,6 @@ CLASS ltcl_db_rules IMPLEMENTATION.
     lt_findings = lo_validator->validate( VALUE ty_rows(
       ( mail = 'b' )
       ( date_from = '20261010' date_to = '20261001' ) ) ).
-
-    ROLLBACK WORK.
 
     cl_abap_unit_assert=>assert_equals(
         exp = 2 act = lv_count
