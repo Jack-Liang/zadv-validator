@@ -471,7 +471,7 @@ src/
   zif_adv_metadata.intf.abap              元数据常量接口（版本/作者/仓库/许可/描述）
   zif_adv_column_check.intf.abap           校验插件接口（自定义单列校验）
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，实现 ZIF_ADV_METADATA 暴露库元数据）
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（51 个用例，其中 1 例 DANGEROUS 级：真实 ZADV_RULES 往返，写后回滚）
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（52 个用例，其中 1 例 DANGEROUS 级：真实 ZADV_RULES 往返，写后回滚）
   zadv_demo.prog.abap                     演示报表
 ```
 
