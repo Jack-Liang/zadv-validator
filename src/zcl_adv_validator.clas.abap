@@ -69,6 +69,9 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
   PRIVATE SECTION.
 
     TYPES:
+      "! method parameters cannot use inline LENGTH -> named type
+      ty_domname TYPE c LENGTH 30,
+
       BEGIN OF ty_field,
         fieldname    TYPE fieldname,
         synthetic    TYPE abap_bool,
@@ -91,7 +94,7 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       ty_domvals TYPE STANDARD TABLE OF ty_domval WITH EMPTY KEY,
 
       BEGIN OF ty_domain,
-        domname   TYPE c LENGTH 30,
+        domname   TYPE ty_domname,
         lowercase TYPE abap_bool,
         values    TYPE ty_domvals,
       END OF ty_domain,
@@ -124,11 +127,11 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         RETURNING VALUE(rt_fields) TYPE ty_fields,
 
       get_domain
-        IMPORTING iv_domname       TYPE c LENGTH 30
+        IMPORTING iv_domname       TYPE ty_domname
         RETURNING VALUE(rs_domain) TYPE ty_domain,
 
       check_domain
-        IMPORTING iv_domname       TYPE c LENGTH 30
+        IMPORTING iv_domname       TYPE ty_domname
                   iv_value         TYPE string
         RETURNING VALUE(rv_ok)     TYPE abap_bool,
 
