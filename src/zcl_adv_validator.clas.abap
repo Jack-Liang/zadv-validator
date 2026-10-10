@@ -527,21 +527,15 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                       && |'|.
 
         " fully classic Open SQL on purpose: strict mode syntax (@) must
-        " not be mixed with dynamic table/WHERE on older support packages;
-        " the dynamic condition is passed as an internal table, the most
-        " compatible form across all releases
-        TYPES ty_cnd TYPE c LENGTH 255.
+        " not be mixed with dynamic table/WHERE on older support packages.
+        " No blanks inside the parentheses: WHERE( name ) must be one
+        " compact token or the parser reads it as a static boolean
+        " expression ("Boolean expression was expected")
+        DATA lv_cnt TYPE i.
 
-        DATA: lt_cond TYPE STANDARD TABLE OF ty_cnd,
-              lv_cnt  TYPE i.
-
-        APPEND lv_where TO lt_cond.
-
-        " no blanks inside the parentheses: WHERE( name ) must be a single
-        " compact token or the parser reads it as a static boolean expression
         SELECT COUNT(*) FROM (iv_table)
           INTO lv_cnt
-          WHERE (lt_cond).
+          WHERE (lv_where).
 
         rv_ok = xsdbool( lv_cnt > 0 ).
 
