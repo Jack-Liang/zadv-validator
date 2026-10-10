@@ -639,7 +639,7 @@ data (real check tables such as T001) are covered by the demo.
 - [x] test gap closing: lowercase domains, interval fixed values — no hardcoded sample domains, samples are discovered at runtime from DD01L (lowercase)/DD07L (interval rows), tests skip automatically where no sample exists
 - [x] English README (README_EN.md, mirroring the Chinese one)
 
-### v2.0 (ecosystem and scenarios) — done
+### v2.0 (ecosystem and scenarios) — released as 2.0.0
 - [x] **rule customizing table**: the client dependent customizing table `ZADV_RULES` ships with the package (maintained via SE16N/SM30, transported as customizing, no code changes); `add_rules_from_db( iv_scenario )` loads all three rule kinds per scenario; dynamic SELECT without activation order dependency, missing table/empty scenario return 0 leniently
 - [x] **end to end Excel upload example**: complete pipeline documented in the README (abap2xlsx → string staging → truncation pre-check → validation → ALV/BAL); abap2xlsx is a separate third party library this package does not depend on — from the staging table on, the pipeline is file source independent (CSV/AL11 alike)
 - [x] **ABAP Cloud feasibility study**: see [docs/abap-cloud.md](docs/abap-cloud.md) — conclusion: v2.x stays on-premise (direct DDIC reads, dynamic SQL, SALV and BAL are not released; adapting would mean rewriting the metadata layer); the first step towards Cloud (a metadata provider interface) is recorded

@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布（v2.0）
+## v2.0.0（2026-10）
 
 - 修复（真机主类激活：类型不兼容）：apply_db_rules 里
   `INSERT <fieldname> INTO TABLE <fields>`——哈希 string 行类型的 INSERT
