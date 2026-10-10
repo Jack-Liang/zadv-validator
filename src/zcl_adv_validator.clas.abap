@@ -327,14 +327,19 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         ENDIF.
 
         " regex rule ......................................................
-        IF <fs_field>-regex IS NOT INITIAL AND
-           matches( val = lv_disp regex = <fs_field>-regex ) = abap_false.
-          APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
-                          value = lv_disp object = <fs_field>-regex
-                          check_type = c_check-regex
-                          message = |Value '{ lv_disp }' does not match the required pattern| )
-                 TO rt_findings.
-          CONTINUE.
+        " FIND REGEX instead of predicate function matches( ) - predicate
+        " functions cannot be compared with = and are not available on
+        " older support packages
+        IF <fs_field>-regex IS NOT INITIAL.
+          FIND REGEX <fs_field>-regex IN lv_disp.
+          IF sy-subrc <> 0.
+            APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
+                            value = lv_disp object = <fs_field>-regex
+                            check_type = c_check-regex
+                            message = |Value '{ lv_disp }' does not match the required pattern| )
+                   TO rt_findings.
+            CONTINUE.
+          ENDIF.
         ENDIF.
 
       ENDLOOP.
@@ -518,11 +523,17 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                       && |'|.
 
         " fully classic Open SQL on purpose: strict mode syntax (@) must
-        " not be mixed with dynamic table/WHERE on older support packages
-        DATA lv_cnt TYPE i.
+        " not be mixed with dynamic table/WHERE on older support packages;
+        " the dynamic condition is passed as an internal table, the most
+        " compatible form across all releases
+        DATA: lt_cond TYPE STANDARD TABLE OF c LENGTH 255,
+              lv_cnt  TYPE i.
+
+        APPEND lv_where TO lt_cond.
+
         SELECT COUNT( * ) FROM ( iv_table )
                INTO lv_cnt
-               WHERE ( lv_where ).
+               WHERE ( lt_cond ).
 
         rv_ok = xsdbool( lv_cnt > 0 ).
 

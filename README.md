@@ -21,7 +21,7 @@
 | 数字串 `NUMC` | 自动（NUMC） | 只允许数字 |
 | 转换出口 | 自动（CONVEXIT） | 比较前调用 `CONVERSION_EXIT_xxx_INPUT`（存在性查 TFDIR，失败回退原值） |
 | 必填 `REQUIRED` | 规则 | 初始值默认放行，标记 required 后报错 |
-| 正则 `REGEX` | 规则 | 用于无 DDIC 类型的字段（如 string 邮箱） |
+| 正则 `REGEX` | 规则 | 用于无 DDIC 类型的字段（如 string 邮箱）；按子串搜索匹配，需全串匹配请用 `^...$` 包裹 |
 | 大小写 | 自动 | 域非 lowercase 时按大写比较，兼容从小写来源导入的数据 |
 
 初始值（空）不做任何检查（除 REQUIRED）——与 SAP 录入行为一致。
