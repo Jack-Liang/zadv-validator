@@ -2,6 +2,18 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
 
   PUBLIC SECTION.
 
+    " library metadata (version, author, repository, ...) lives in a
+    " constants-only interface so that it stays usable without the class
+    " and other projects can adopt the same convention
+    INTERFACES zif_adv_metadata.
+
+    ALIASES:
+      c_version     FOR zif_adv_metadata~c_version,
+      c_author      FOR zif_adv_metadata~c_author,
+      c_repository  FOR zif_adv_metadata~c_repository,
+      c_license     FOR zif_adv_metadata~c_license,
+      c_description FOR zif_adv_metadata~c_description.
+
     TYPES:
       "! One error found by the validator. Row 0 is used for structural
       "! problems (bad table type, rule references unknown field, ...).
