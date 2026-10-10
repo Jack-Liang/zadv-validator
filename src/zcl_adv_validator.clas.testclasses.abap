@@ -1434,10 +1434,12 @@ CLASS ltcl_db_rules IMPLEMENTATION.
   METHOD db_rules_roundtrip.
     CONSTANTS lc_scenario TYPE c LENGTH 30 VALUE 'ZADV_UNIT_TEST'.
 
-    " component order of the real table row (minus MANDT, which the
-    " INSERT fills automatically): INSERT dbtab matches positionally,
-    " and ty_db_rule of the main class has a different field order
+    " component order of the real table row INCLUDING MANDT: dynamic
+    " INSERT dbtab matches positionally against the complete row (no
+    " automatic client fill like the static form), so the client column
+    " must be present and filled with the current client
     TYPES: BEGIN OF ty_tabl_row,
+             mandt       TYPE mandt,
              scenario    TYPE c LENGTH 30,
              rule_id     TYPE c LENGTH 30,
              fieldname   TYPE fieldname,
@@ -1480,14 +1482,24 @@ CLASS ltcl_db_rules IMPLEMENTATION.
 
     DATA lt_insert TYPE ty_tabl_rows.
     lt_insert = VALUE #(
-      ( scenario = lc_scenario rule_id = 'R1' rule_type = 'COLUMN'
+      ( mandt = sy-mandt scenario = lc_scenario rule_id = 'R1' rule_type = 'COLUMN'
         fieldname = 'MAIL' regex = `^a+$` severity = 'W' )
-      ( scenario = lc_scenario rule_id = 'R2' rule_type = 'COMPARE'
+      ( mandt = sy-mandt scenario = lc_scenario rule_id = 'R2' rule_type = 'COMPARE'
         fieldname = 'DATE_FROM' operator = 'LE' other_field = 'DATE_TO' ) ).
 
     DELETE FROM (lv_tab) WHERE scenario = lc_scenario.
 
     INSERT (lv_tab) FROM TABLE lt_insert.
+
+    " surface DML problems as a finding with a message instead of a
+    " naked runtime error further down
+    IF sy-subrc <> 0.
+      ROLLBACK WORK.
+      cl_abap_unit_assert=>assert_equals(
+          exp = 0 act = sy-subrc
+          msg = |INSERT into ZADV_RULES failed with sy-subrc { sy-subrc }| ).
+      RETURN.
+    ENDIF.
 
     " own LUW, the SELECT of add_rules_from_db( ) sees the uncommitted
     " rows; load and validate BEFORE any assertion can abort the test
