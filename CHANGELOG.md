@@ -2,6 +2,10 @@
 
 ## 未发布
 
+- demo：ZADV_DEMO 补 v1.0 特性演示段——组合外键（KNA1 LAND1+REGIO → T005A）、
+  单位参照（MARA NTGEW → GEWEI → T006）、货币参照（VBAK NETWR → WAERS →
+  TCURC），各一段有效行+含错行；DDIC 表经 RTTS 运行期解析，缺对象系统自动
+  跳过不阻塞激活（与测试类动态建表同一策略），finding 输出在经典列表
 - 修复：`describe_by_name` 对未知类型在部分版本抛出**无法捕获**的异常（精简版
   开发系统上单测 TYPE_NOT_FOUND 短转储，`CATCH cx_root` 拦不住）；所有可收到
   未知名字的入口先以 `dd02l`/`dd04l` SELECT 预检存在性——测试辅助

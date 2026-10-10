@@ -4,6 +4,12 @@ REPORT zadv_demo.
 "* against DDIC domain fixed values, check tables and format rules,
 "* then shows every invalid input in an ALV.
 "*
+"* A second section demonstrates the v1.0 features (composite foreign
+"* keys via DD05S, currency/unit code references) on real DDIC tables
+"* (KNA1, MARA, VBAK). Those tables are resolved at RUNTIME so the
+"* demo still activates on minimal systems - the sections are skipped
+"* with a note when the object does not exist.
+"*
 "* The demo deliberately avoids SELECTs on customizing tables so it
 "* activates on every system (trial/developer editions often lack T001
 "* etc.). Check-table findings appear only where the check table is
@@ -21,6 +27,99 @@ TYPES: BEGIN OF ty_upload,
        END OF ty_upload.
 
 DATA gt_upload TYPE STANDARD TABLE OF ty_upload WITH EMPTY KEY.
+
+
+"* row model of the runtime DDIC demos: a row is a list of
+"* fieldname/value cells assigned to the dynamically created DDIC row
+TYPES: BEGIN OF ty_cell,
+         fieldname TYPE fieldname,
+         value     TYPE string,
+       END OF ty_cell,
+       ty_cells TYPE STANDARD TABLE OF ty_cell WITH EMPTY KEY,
+       BEGIN OF ty_demo_row,
+         cells TYPE ty_cells,
+       END OF ty_demo_row,
+       ty_demo_rows TYPE STANDARD TABLE OF ty_demo_row WITH EMPTY KEY.
+
+
+CLASS lcl_ddic_demo DEFINITION FINAL CREATE PRIVATE.
+  PUBLIC SECTION.
+    CLASS-METHODS run
+      IMPORTING iv_tabname TYPE clike
+                iv_title   TYPE clike
+                it_rows    TYPE ty_demo_rows.
+ENDCLASS.
+
+
+CLASS lcl_ddic_demo IMPLEMENTATION.
+
+  METHOD run.
+    WRITE: / iv_title.
+    ULINE.
+
+    DATA: lr_tab  TYPE REF TO data,
+          lr_line TYPE REF TO data.
+
+    DATA(lv_tabname) = to_upper( CONV string( iv_tabname ) ).
+
+    " runtime resolution on purpose: a static TYPE reference to KNA1/
+    " MARA/VBAK would block the activation on minimal systems.
+    " Existence pre-check on dd02l first: describe_by_name dumps
+    " (uncatchably) for unknown names on some releases
+    SELECT SINGLE @abap_true FROM dd02l
+           WHERE tabname = @lv_tabname AND as4local = 'A'
+           INTO @DATA(lv_tab_exists).
+
+    IF lv_tab_exists <> abap_true.
+      WRITE: / `  skipped:`, lv_tabname, `is not on this system`.
+      SKIP.
+      RETURN.
+    ENDIF.
+
+    TRY.
+        DATA(lo_tab) = CAST cl_abap_tabledescr(
+                         cl_abap_typedescr=>describe_by_name( lv_tabname ) ).
+      CATCH cx_root ##NO_TEXT.
+        WRITE: / `  skipped:`, lv_tabname, `cannot be described`.
+        SKIP.
+        RETURN.
+    ENDTRY.
+
+    DATA(lo_line) = lo_tab->get_table_line_type( ).
+
+    CREATE DATA: lr_tab  TYPE HANDLE lo_tab,
+                 lr_line TYPE HANDLE lo_line.
+
+    FIELD-SYMBOLS: <lt_rows> TYPE ANY TABLE,
+                   <ls_row>  TYPE any,
+                   <lv_val>  TYPE any.
+    ASSIGN: lr_tab->*  TO <lt_rows>,
+            lr_line->* TO <ls_row>.
+
+    LOOP AT it_rows INTO DATA(ls_row).
+      LOOP AT ls_row-cells INTO DATA(ls_cell).
+        ASSIGN COMPONENT ls_cell-fieldname OF STRUCTURE <ls_row> TO <lv_val>.
+        IF sy-subrc = 0.
+          <lv_val> = ls_cell-value.
+        ENDIF.
+      ENDLOOP.
+      INSERT <ls_row> INTO TABLE <lt_rows>.
+    ENDLOOP.
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( <lt_rows> ).
+
+    IF lt_findings IS INITIAL.
+      WRITE: / `  all rows valid`.
+    ELSE.
+      LOOP AT lt_findings INTO DATA(ls_finding).
+        WRITE: / `  row`, ls_finding-row, ls_finding-fieldname,
+                 ls_finding-value, ls_finding-check_type, ls_finding-object.
+      ENDLOOP.
+    ENDIF.
+    SKIP.
+  ENDMETHOD.
+
+ENDCLASS.
 
 
 START-OF-SELECTION.
@@ -64,6 +163,38 @@ START-OF-SELECTION.
   " ( fieldname = 'BUKRS' checktable = 'T001' checkfield = 'BUKRS' )
 
   DATA(lt_findings) = lo_validator->validate( gt_upload ).
+
+  " ---------------------------------------------------------------------
+  " v1.0 feature demos on real DDIC tables (runtime resolved, skipped
+  " with a note where the objects do not exist); their findings go to
+  " the classic list output below, the upload findings to the ALV
+  " ---------------------------------------------------------------------
+  lcl_ddic_demo=>run(
+    iv_tabname = 'KNA1'
+    iv_title   = 'composite foreign key via DD05S: KNA1 LAND1+REGIO -> T005A'
+    it_rows    = VALUE ty_demo_rows(
+      ( cells = VALUE #( ( fieldname = 'LAND1' value = 'DE' )
+                         ( fieldname = 'REGIO' value = 'BY' ) ) )
+      ( cells = VALUE #( ( fieldname = 'LAND1' value = 'DE' )
+                         ( fieldname = 'REGIO' value = 'ZZ' ) ) ) ) ).
+
+  lcl_ddic_demo=>run(
+    iv_tabname = 'MARA'
+    iv_title   = 'unit reference: MARA NTGEW (QUAN) -> GEWEI checked against T006'
+    it_rows    = VALUE ty_demo_rows(
+      ( cells = VALUE #( ( fieldname = 'NTGEW' value = '1' )
+                         ( fieldname = 'GEWEI' value = 'KG' ) ) )
+      ( cells = VALUE #( ( fieldname = 'NTGEW' value = '1' )
+                         ( fieldname = 'GEWEI' value = 'ZZX' ) ) ) ) ).
+
+  lcl_ddic_demo=>run(
+    iv_tabname = 'VBAK'
+    iv_title   = 'currency reference: VBAK NETWR (CURR) -> WAERS checked against TCURC'
+    it_rows    = VALUE ty_demo_rows(
+      ( cells = VALUE #( ( fieldname = 'NETWR' value = '1' )
+                         ( fieldname = 'WAERS' value = 'EUR' ) ) )
+      ( cells = VALUE #( ( fieldname = 'NETWR' value = '1' )
+                         ( fieldname = 'WAERS' value = 'ZZZ9' ) ) ) ) ).
 
   TRY.
       cl_salv_table=>factory(
