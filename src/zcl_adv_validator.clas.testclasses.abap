@@ -1135,10 +1135,10 @@ CLASS ltcl_validate IMPLEMENTATION.
     " single value logic would reject it, because it is not the start
     " of its own row. The sample domain is discovered at runtime from
     " dd07l, systems without any interval domain skip the test.
-    " Explicit target structure on purpose: the 7.40 SP08 syntax check
-    " rejected @space as a host variable (and the inline @DATA( )
-    " derivation of that statement followed it into the dump); a blank
-    " literal plus INTO CORRESPONDING FIELDS activate cleanly
+    " dd07l~domvalue_h qualified on purpose: on 7.40 SP08 a bare name
+    " on the RIGHT side of a WHERE comparison parses as a host variable
+    " ("has to be escaped using @ or qualified by a table name"), only
+    " the qualified form reads as a column
     TYPES: BEGIN OF ty_domrow,
              domname    TYPE dd07l-domname,
              domvalue_l TYPE dd07l-domvalue_l,
@@ -1150,7 +1150,7 @@ CLASS ltcl_validate IMPLEMENTATION.
       FROM dd07l
       WHERE as4local = 'A'
         AND domvalue_h <> ' '
-        AND domvalue_l <> domvalue_h
+        AND domvalue_l <> dd07l~domvalue_h
       INTO CORRESPONDING FIELDS OF @ls_interval.
     IF sy-subrc <> 0.
       RETURN.
