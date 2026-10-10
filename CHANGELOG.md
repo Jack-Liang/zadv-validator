@@ -2,6 +2,12 @@
 
 ## v1.1.0（2026-10）
 
+- 修复（真机单测：查重 object 断言失败）：`unique_fields` 里
+  `SORT itab`（无 BY）与 `DELETE ADJACENT DUPLICATES`（无 COMPARING）
+  都按**表键**比较，而 `ty_values` 是 `WITH EMPTY KEY`——两者双双空转
+  （排序不变、删除全删），字段组合按哈希迭代序拼 object，顺序不确定；
+  改为 `SORT rt_fields BY table_line ASCENDING`，DELETE 移除（哈希
+  fields 本身无重复，锚点回退只有单元素）
 - 修复（真机单测两例失败）：比较规则 finding 的 object/消息 016 里的
   表达式原输出操作符代码（`DATE_FROM LE DATE_TO`），改为符号形式
   `DATE_FROM <= DATE_TO`（注册 API 仍用 EQ/NE/LT/LE/GT/GE，仅展示层

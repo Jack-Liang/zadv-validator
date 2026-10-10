@@ -2543,6 +2543,12 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
 
   METHOD unique_fields.
+    " SORT BY table_line on purpose: without BY, SORT (like DELETE
+    " ADJACENT DUPLICATES without COMPARING) uses the table key - and
+    " ty_values has an EMPTY key, which turns both statements into
+    " no-ops. DELETE is not needed at all: the hashed fields list of
+    " the rule cannot contain duplicates, and the anchor fallback
+    " appends a single entry
     IF is_rule-fields IS NOT INITIAL.
       LOOP AT is_rule-fields INTO DATA(lv_field).
         APPEND to_upper( lv_field ) TO rt_fields.
@@ -2550,8 +2556,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     ELSEIF is_rule-field IS NOT INITIAL.
       APPEND to_upper( CONV string( is_rule-field ) ) TO rt_fields.
     ENDIF.
-    SORT rt_fields ASCENDING.
-    DELETE ADJACENT DUPLICATES FROM rt_fields.
+    SORT rt_fields BY table_line ASCENDING.
   ENDMETHOD.
 
 
