@@ -2392,7 +2392,18 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         CONTINUE.
       ENDIF.
 
-      DATA(lv_expr) = |{ <fs_cr>-field } { <fs_cr>-operator } { <fs_cr>-other }|.
+      " operator symbol in the finding text: 'DATE_FROM <= DATE_TO'
+      " reads better than 'DATE_FROM LE DATE_TO'
+      DATA(lv_op_sym) = SWITCH string( <fs_cr>-operator
+                            WHEN 'EQ' THEN `=`
+                            WHEN 'NE' THEN `<>`
+                            WHEN 'LT' THEN `<`
+                            WHEN 'LE' THEN `<=`
+                            WHEN 'GT' THEN `>`
+                            WHEN 'GE' THEN `>=`
+                            ELSE <fs_cr>-operator ).
+
+      DATA(lv_expr) = |{ <fs_cr>-field } { lv_op_sym } { <fs_cr>-other }|.
 
       DATA lv_ok TYPE abap_bool.
       lv_ok = abap_false.

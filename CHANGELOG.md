@@ -2,6 +2,11 @@
 
 ## v1.1.0（2026-10）
 
+- 修复（真机单测两例失败）：比较规则 finding 的 object/消息 016 里的
+  表达式原输出操作符代码（`DATE_FROM LE DATE_TO`），改为符号形式
+  `DATE_FROM <= DATE_TO`（注册 API 仍用 EQ/NE/LT/LE/GT/GE，仅展示层
+  映射）；查重用例第三行误用 `status = 'B'`——AS4LOCAL 固定值仅
+  A/N/I，多出一条 DOMAIN finding 导致计数断言失败，改用 'N'
 - 修复（7.40 SP08 测试类激活，区间域值用例的发现 SELECT）：WHERE 里
   列对列比较的右侧裸字段名被当作宿主变量报错（"has to be escaped using
   @ or qualified by a table name"），右侧改用 `dd07l~domvalue_h` 表名

@@ -975,7 +975,7 @@ CLASS ltcl_validate IMPLEMENTATION.
     DATA(lt_findings) = lo_validator->validate( VALUE ty_rows(
       ( status = 'A' mail = 'x@y' )
       ( status = 'A' mail = 'x@y' )
-      ( status = 'B' mail = 'x@y' ) ) ).
+      ( status = 'N' mail = 'x@y' ) ) ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings )
