@@ -1,5 +1,38 @@
 # 更新日志
 
+## 未发布（v2.0）
+
+- 规则配置表（v2.0）：新增客户端相关定制表 `ZADV_RULES`
+  （`zadv_rules.tabl.xml`，定制类 CUS1，SE16N/SM30 维护、随定制请求传输、
+  免改代码；键 SCENARIO/RULE_ID/FIELDNAME）与
+  `add_rules_from_db( iv_scenario iv_tabname )` 场景化加载：COLUMN 行映射
+  `add_rule`（required/regex/checktable+checkfield/domname）、COMPARE 行映射
+  `add_compare_rule`（fieldname/operator/other_field）、UNIQUE 行按
+  RULE_ID 分组映射 `add_unique_rule`（每行一个键字段，字母序首字段为
+  锚点），severity/rule_id 通用，未知 RULE_TYPE 跳过；SELECT 走动态表名——
+  类与表无激活顺序依赖，表缺失/场景无记录返回 0 不抛异常；映射本体是
+  纯私有方法 `apply_db_rules`（无 DB 访问，单测直调）
+- 分批校验（v2.0）：`validate( )` 新增 `iv_row_offset`——大表切片校验时
+  行号 = 偏移 + 片内位置（列级/比较/查重 finding 一致，STRUCTURE 恒 0），
+  各片结果可直接汇总；顺带修复哈希表输入时查重 finding 行号恒为 0 的问题
+  （sy-tabix 对 HASHED 表不填充，改为手工计数）；查重规则与分批互斥
+  （跨片重复不可见）的语义已在 README 注明
+- demo：ZADV_DEMO 开头按场景 `DEMO` 加载配置表规则，无记录时打印维护
+  提示（不阻塞演示）
+- 单测 47 → 50：配置表映射（三类映射/UNIQUE 锚点/未知类型跳过/端到端
+  severity+rule_id 回显）、宽容加载（表缺失与空场景均返回 0）、行号偏移
+  （列级与查重 finding 均随偏移）
+- 工程：ABAP Cloud 适配可行性调研落档 `docs/abap-cloud.md`——结论 v2.x
+  维持 on-prem（DDIC 直读/动态 SQL/转换出口/SALV/BAL 均未 released，
+  Cloud 侧该场景由 RAP 校验框架性替代），向 Cloud 演进的第一步（元数据
+  读取接口化）已记录；GitHub Actions 新增 `abap-unit.yml`（abaplint 之后
+  对 self-hosted runner 执行 abapGit 拉取激活 + ABAP Unit），经仓库变量
+  `ABAP_RUNNER` 控制启停、默认关闭，接入 runner 即生效
+- 文档：README/README_EN 新增规则配置表、Excel 上传端到端示例（abap2xlsx
+  → string 暂存 → 截断预检 → 校验 → ALV/BAL，本库不依赖 abap2xlsx）、
+  大表分批与并行校验三章节；能力表/用法总览/仓库结构/测试/路线图同步，
+  v2.0 五项（规则配置表/Excel 示例/Cloud 调研/CI 扩展/分批并行）全部交付
+
 ## v1.1.0（2026-10）
 
 - 修复（真机单测：查重 object 断言失败）：`unique_fields` 里

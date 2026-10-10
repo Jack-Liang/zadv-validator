@@ -28,6 +28,7 @@
 | 比较 `COMPARE` | 规则（`add_compare_rule`） | 声明式跨字段比较：`field operator other`（EQ/NE/LT/LE/GT/GE），如 DATE_FROM <= DATE_TO；任一操作数为初始值时跳过（要拦截空值请配合 required）；行级规则，不受列过滤影响 |
 | 查重 `UNIQUE` | 规则（`add_unique_rule`） | 声明式文件内查重：字段组合在整个表中必须唯一，首次出现放行、后续重复报错（消息注明首次所在行）；组合内字段全为初始值的行豁免 |
 | 正则 `REGEX` | 规则 | 用于无 DDIC 类型的字段（如 string 邮箱）；按子串搜索匹配，需全串匹配请用 `^...$` 包裹 |
+| 规则来源：配置表 | 自动（`ZADV_RULES`） | 三类规则按场景（SCENARIO）存定制表，`add_rules_from_db( )` 加载，顾问可维护、随定制请求传输，免改代码；语义与代码注册完全一致 |
 | 大小写 | 自动 | 域非 lowercase 时按大写比较，兼容从小写来源导入的数据 |
 
 初始值（空）不做任何检查（除 REQUIRED）——与 SAP 录入行为一致。
@@ -97,10 +98,11 @@ MARA、货币参照 VBAK），DDIC 表在**运行期解析**，缺对象的系�
 
 | 方法 | 用途 |
 |---|---|
-| `validate( it_data )` | 校验任意内表，返回 `ty_findings`（每条含行号/字段/原值/类别/消息/severity/rule_id） |
+| `validate( it_data iv_row_offset )` | 校验任意内表，返回 `ty_findings`（每条含行号/字段/原值/类别/消息/severity/rule_id）；`iv_row_offset` 供大表分批时保持全局行号 |
 | `add_rule( )` / `add_rules( )` / `clear_rules( )` | 列级显式规则：required / regex / checktable+checkfield / domname / severity / rule_id（无 DDIC 类型的字段靠它接管） |
 | `add_compare_rule( )` / `add_compare_rules( )` / `clear_compare_rules( )` | 行级跨字段比较：`field operator other`（EQ/NE/LT/LE/GT/GE），如 DATE_FROM <= DATE_TO；初始操作数跳过 |
 | `add_unique_rule( )` / `add_unique_rules( )` / `clear_unique_rules( )` | 表级查重：字段组合全表唯一（`fields` 空 = 仅 `field` 单字段）；首次放行、后续报错并注明首次行号 |
+| `add_rules_from_db( )` | 从配置表 `ZADV_RULES` 按场景（SCENARIO）加载三类规则；返回加载数，表缺失/场景无记录返回 0 不抛异常 |
 | `add_column_check( )` / `clear_column_checks( )` | 注册插件（实现 `ZIF_ADV_COLUMN_CHECK` 的类），自带 ok/文本/severity/rule_id，收到整行引用 |
 | `only_fields( )` / `exclude_fields( )` | 列过滤（白名单优先，整体替换，传空重置） |
 | `clear_caches( )` | 清空域值/检查表/转换出口缓存（定制数据变更后用） |
@@ -279,6 +281,46 @@ DATA(lt_findings) = zcl_adv_validator=>precheck_truncation(
 - 目标不存在/非 DDIC 结构 → STRUCTURE finding（消息 012），不抛异常
 - 暂存侧的 raw/xstring 列无文本长度概念，自动跳过
 
+## Excel 上传端到端示例
+
+文件上传的完整管线（abap2xlsx 读文件 → string 暂存 → 截断预检 → 校验 →
+展示/留档）。abap2xlsx 是独立第三方库（[abap2xlsx](https://github.com/abap2xlsx/abap2xlsx)），
+需单独安装，本库**不依赖它**——管线从第 2 步起与文件来源无关，CSV/应用服务器
+文件同样适用：
+
+```abap
+" 1) abap2xlsx 读工作表（reader API 以所用版本为准）
+DATA(lo_excel) = CAST zif_excel_reader( NEW zcl_excel_reader_2007( )
+                   )->load_file( i_excel2007 = lv_xstring ).
+DATA(lo_sheet) = lo_excel->get_worksheet_by_name( 'Sheet1' ).
+
+" 2) 写入 string 暂存表：列名与目标 DDIC 结构同名（此处以 ZSDI_UPLOAD 为例）
+DATA lt_stage TYPE STANDARD TABLE OF ty_stage WITH EMPTY KEY.  " 全 string 列
+" LOOP AT lo_sheet->... INTO lt_stage.  " 或按行读单元格
+
+" 3) 截断预检：超长值在 MOVE 到目标结构之前预警
+DATA(lt_trunc) = zcl_adv_validator=>precheck_truncation(
+                     it_data = lt_stage iv_typename = 'ZSDI_UPLOAD' ).
+" lt_trunc 非空时按 severity 分流：E 回退修正 / W 提示确认
+
+" 4) MOVE 到目标类型并校验（规则从配置表按场景加载，免改代码）
+DATA lt_upload TYPE STANDARD TABLE OF zsdi_upload WITH EMPTY KEY.
+LOOP AT lt_stage ASSIGNING FIELD-SYMBOL(<ls_stage>).
+  APPEND INITIAL LINE TO lt_upload ASSIGNING FIELD-SYMBOL(<ls_upload>).
+  MOVE-CORRESPONDING <ls_stage> TO <ls_upload>.
+ENDLOOP.
+
+DATA(lo_validator) = NEW zcl_adv_validator( ).
+lo_validator->add_rules_from_db( iv_scenario = 'ZSDI_UPLOAD' ).
+DATA(lt_findings) = lo_validator->validate( lt_upload ).
+
+" 5) 展示（ALV）+ 留档（BAL，SLG1 查看）
+zcl_adv_validator=>display_findings(
+    it_findings = lt_findings iv_title = 'Upload validation' ).
+zcl_adv_validator=>log_findings(
+    it_findings = lt_findings iv_object = 'ZSDI_UPLOAD' iv_commit = abap_true ).
+```
+
 ## 应用日志（BAL）
 
 把 findings 写成 SLG1 可查的应用日志（每条 finding 一条消息，消息类型 =
@@ -297,6 +339,39 @@ DATA(lv_log_handle) = zcl_adv_validator=>log_findings(
   **从不抛异常**（结果请看 SLG1）
 - 保存在当前 LUW，提交由调用方控制；不在更大事务里时可用
   `iv_commit = abap_true` 让 helper 直接提交
+
+## 规则配置表（ZADV_RULES）
+
+规则可以不改代码、由顾问维护并随传输发布：包内自带客户端相关定制表
+`ZADV_RULES`（定制类 CUS1），每行一条规则或查重键字段，按**场景**加载：
+
+```abap
+DATA(lo_validator) = NEW zcl_adv_validator( ).
+DATA(lv_count) = lo_validator->add_rules_from_db( iv_scenario = 'ZSDI_UPLOAD' ).
+" lv_count = 实际加载数；0 = 表缺失或场景无记录（不抛异常）
+
+DATA(lt_findings) = lo_validator->validate( gt_upload ).
+```
+
+表结构（键：SCENARIO / RULE_ID / FIELDNAME）：
+
+| RULE_TYPE | 映射到 | 用到的列 |
+|---|---|---|
+| `COLUMN` | `add_rule( )` 列级规则 | FIELDNAME + REQUIRED / REGEX / CHECKTABLE + CHECKFIELD / DOMNAME |
+| `COMPARE` | `add_compare_rule( )` 行级比较 | FIELDNAME（左操作数）+ OPERATOR（EQ/NE/LT/LE/GT/GE）+ OTHER_FIELD（右操作数） |
+| `UNIQUE` | `add_unique_rule( )` 表级查重 | 同一 RULE_ID 的多行各贡献一个键字段（FIELDNAME），按字段名排序最前者为锚点；单行即单字段查重 |
+
+SEVERITY、RULE_ID 三类通用（语义与代码注册一致）。要点：
+
+- **维护**：SE16N 直接维护，或 SE11 里为表生成维护界面（SM30）；
+  随定制请求传输（无需改代码、无需重新发布程序）
+- **宽容**：未知 RULE_TYPE 跳过；表对象不存在或场景无记录返回 0——
+  SELECT 走动态表名，类与表之间**没有激活顺序依赖**
+- 未知字段名/非法操作符不会被跳过：validate 照常报 STRUCTURE
+  finding（003/020），配置错误在第一次运行就可见
+- 同一实例可与代码注册（`add_rule` 等）混用，加载只追加不清空；
+  REGEX 列为 CHAR255，超长正则请在代码里注册
+- DEMO：`ZADV_DEMO` 开头即按场景 `DEMO` 加载（无记录时打印说明）
 
 ## 返回结构 ty_finding
 
@@ -330,6 +405,37 @@ DATA(lv_log_handle) = zcl_adv_validator=>log_findings(
 4. 缓存：域固定值（按域）、检查表命中（按 表+字段+值）、转换出口存在性
    （按出口名）均为实例级缓存；`clear_caches( )` 可在定制数据变更后清空。
 
+## 大表分批与并行校验
+
+`validate( )` 支持分批：传 `iv_row_offset` 后 finding 行号 = 偏移 + 片内
+位置（结构性 finding 恒为 0），各片结果可直接汇总：
+
+```abap
+DATA: lt_findings TYPE zcl_adv_validator=>ty_findings,
+      lt_chunk    LIKE gt_upload,
+      lv_off      TYPE i.
+
+WHILE lv_off < lines( gt_upload ).
+  CLEAR lt_chunk.
+  APPEND LINES OF gt_upload
+       FROM lv_off + 1
+         TO nmin( val1 = lv_off + 50000 val2 = lines( gt_upload ) )
+       TO lt_chunk.
+  APPEND LINES OF lo_validator->validate( it_data       = lt_chunk
+                                          iv_row_offset = lv_off )
+       TO lt_findings.
+  lv_off = lv_off + 50000.
+ENDWHILE.
+```
+
+- 分批主要控制单次运行时长与内存；实例缓存跨片保留（同实例分批时
+  检查表去重值只查一次库）
+- **查重规则与分批互斥**：`UNIQUE` 在每次 `validate( )` 内独立求值，
+  跨片重复检测不到——需要查重的场景不要分批，或先在库里预聚合
+- 并行：每片一个**新实例**（校验器无共享状态，缓存独立），经 aRFC/
+  后台任务并行执行，`iv_row_offset` 保证行号可合并；收益最大的是
+  检查表 DB 往返占比高的场景，注意并行任务数与数据库连接配额
+
 ## 设计取舍与限制
 
 - **外键映射（DD05S）**：DDIC 检查表字段的真实映射读自 DD05S——非同名检查
@@ -356,13 +462,16 @@ DATA(lv_log_handle) = zcl_adv_validator=>log_findings(
 CHANGELOG.md                             更新日志
 abaplint.json                            abaplint 基础规则（CI 静态检查）
 .github/workflows/abaplint.yml           GitHub Actions：push/PR 自动跑 abaplint
+.github/workflows/abap-unit.yml          GitHub Actions：self-hosted ABAP 系统激活+单测（默认关闭）
+docs/abap-cloud.md                       ABAP Cloud 适配可行性调研
 src/
   package.devc.xml                        包 ZADV_VALIDATOR
   zadv_validator.msag.xml                 SE91 消息类 ZADV_VALIDATOR（001–020）
+  zadv_rules.tabl.xml                     规则配置表 ZADV_RULES（定制表 CUS1，随定制请求传输）
   zif_adv_metadata.intf.abap              元数据常量接口（版本/作者/仓库/许可/描述）
   zif_adv_column_check.intf.abap           校验插件接口（自定义单列校验）
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，实现 ZIF_ADV_METADATA 暴露库元数据）
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（47 个用例）
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（50 个用例）
   zadv_demo.prog.abap                     演示报表
 ```
 
@@ -385,7 +494,9 @@ TCURC/WAERS，有效值通过 + 未知代码拦截）、元数据接口完整性
 全初始行豁免、未知字段）、截断预检（超长值 W 级报告、合规值与暂存特有
 列放行）、BAL 消息映射（severity→消息类型、4×50 字符分块、空 findings
 不建日志）、小写域与区间型域值（运行期从 DD01L/DD07L 发现样例对象，
-不硬编码跨版本依赖；无样例的系统上自动跳过）。
+不硬编码跨版本依赖；无样例的系统上自动跳过）、规则配置表映射
+（COLUMN/COMPARE/UNIQUE 三类映射与锚点规则、未知类型跳过、表缺失/
+空场景宽容返回 0）、行号偏移（列级与查重 finding 均随偏移）。
 KNA1/MARA/VBAK/VBELN 等应用 DDIC 对象一律运行时解析（RTTI 动态建表、
 逐组件赋值），测试类不含对应用表的静态类型引用——缺这些对象的系统
 （如无 SD/MM 的精简安装）上相关用例自动空跑跳过，不再阻塞类激活；
@@ -418,12 +529,22 @@ KNA1/MARA/VBAK/VBELN 等应用 DDIC 对象一律运行时解析（RTTI 动态建
 - [x] 单测补遗：小写域、区间型域值——不再依赖硬编码样例域，运行期从 DD01L（lowercase）/DD07L（区间行）发现样例对象，无样例系统自动跳过
 - [x] README 英文版（README_EN.md，与中文版同构）
 
-### v2.0+（生态与场景）
-- [ ] 规则配置表：校验规则存自定义表，顾问可维护、可传输，免改代码
-- [ ] Excel 上传端到端示例（abap2xlsx → 暂存表 → 校验 → ALV）
-- [ ] ABAP Cloud 适配可行性调研（以 released 对象替代 DD07L/DD01L/TFDIR 直读与动态 SQL）
-- [ ] GitHub Actions 扩展：abapGit trial 系统自动激活与 ABAP Unit（abaplint CI 已就绪）
-- [ ] 大表分批/并行校验
+### v2.0（生态与场景）——已实现
+- [x] **规则配置表**：客户端相关定制表 `ZADV_RULES` 随包交付（SE16N/SM30 维护、
+  随定制请求传输、免改代码），`add_rules_from_db( iv_scenario )` 场景化加载
+  三类规则；动态 SELECT 无激活顺序依赖，表缺失/空场景宽容返回 0
+- [x] **Excel 上传端到端示例**：README 文档化完整管线（abap2xlsx → string
+  暂存 → 截断预检 → 校验 → ALV/BAL）；abap2xlsx 为独立第三方库，本库不引入
+  依赖，管线自暂存表起与文件来源无关（CSV/AL11 同样适用）
+- [x] **ABAP Cloud 适配可行性调研**：见 [docs/abap-cloud.md](docs/abap-cloud.md)——
+  结论：v2.x 维持 on-prem（DDIC 直读、动态 SQL、SALV、BAL 均未 released，
+  适配等于重写元数据层）；向 Cloud 演进的第一步（元数据读取接口化）已记录
+- [x] **GitHub Actions 扩展**：`abap-unit.yml` 工作流就绪（abaplint 之后对
+  self-hosted runner 执行 abapGit 拉取激活 + ABAP Unit），经仓库变量
+  `ABAP_RUNNER` 控制启停，接入 runner 即生效；`abaplint.yml` 维持不变
+- [x] **大表分批/并行校验**：`validate( iv_row_offset )` 分批保持全局行号
+  （顺带修复哈希表输入时查重行号恒为 0 的问题），并行调用模式（每片独立
+  实例 + 偏移合并）文档化；查重规则与分批互斥的语义已在文档注明
 
 明确不做：7.02 及以下语法降级（维护成本大于收益）、多包拆分、替代 RAP 校验。
 

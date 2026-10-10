@@ -32,6 +32,7 @@ validator and adds domain fixed value checks plus error location
 | Comparison `COMPARE` | rule (`add_compare_rule`) | declarative cross field comparison: `field operator other` (EQ/NE/LT/LE/GT/GE), e.g. DATE_FROM <= DATE_TO; skipped when either operand is initial (combine with required to catch empties); row level rule, independent of the column filters |
 | Uniqueness `UNIQUE` | rule (`add_unique_rule`) | declarative file level duplicate check: a field combination must stay unique across the table, the first occurrence passes, later repeats are reported (the message names the first row); rows whose combination is all initial are exempt |
 | Regex `REGEX` | rule | for fields without a DDIC type (e.g. a string mail address); substring search semantics, wrap in `^...$` for a full match |
+| Rule source: customizing | automatic (`ZADV_RULES`) | all three rule kinds stored per scenario (SCENARIO) in a customizing table, loaded with `add_rules_from_db( )` — consultant maintainable, transported as customizing, no code changes; semantics identical to code registration |
 | Case handling | automatic | values are compared in upper case unless the domain allows lowercase, so data imported from case insensitive sources still validates |
 
 Initial (empty) values pass every check except REQUIRED — consistent with
@@ -115,10 +116,11 @@ helpers need no instance, use them where they fit.
 
 | Method | Purpose |
 |---|---|
-| `validate( it_data )` | validate any internal table, returns `ty_findings` (each with row/field/value/check_type/message/severity/rule_id) |
+| `validate( it_data iv_row_offset )` | validate any internal table, returns `ty_findings` (each with row/field/value/check_type/message/severity/rule_id); `iv_row_offset` keeps global row numbers when validating slices of a big table |
 | `add_rule( )` / `add_rules( )` / `clear_rules( )` | column level explicit rules: required / regex / checktable+checkfield / domname / severity / rule_id (how fields without DDIC types get covered) |
 | `add_compare_rule( )` / `add_compare_rules( )` / `clear_compare_rules( )` | row level cross field comparison: `field operator other` (EQ/NE/LT/LE/GT/GE), e.g. DATE_FROM <= DATE_TO; initial operands are skipped |
 | `add_unique_rule( )` / `add_unique_rules( )` / `clear_unique_rules( )` | table level duplicates: a field combination stays unique (empty `fields` = just `field`); first occurrence passes, later ones are reported with the first row |
+| `add_rules_from_db( )` | load the three rule kinds per scenario (SCENARIO) from the `ZADV_RULES` customizing table; returns the number of rules, 0 without raising when the table or scenario is empty |
 | `add_column_check( )` / `clear_column_checks( )` | register a plugin (class implementing `ZIF_ADV_COLUMN_CHECK`): decides ok/text/severity/rule_id itself, receives the whole row |
 | `only_fields( )` / `exclude_fields( )` | column filters (whitelist wins, replaces the list as a whole, empty resets) |
 | `clear_caches( )` | discard domain/check table/conversion exit caches (after customizing changes) |
@@ -334,6 +336,52 @@ DATA(lt_findings) = zcl_adv_validator=>precheck_truncation(
 - raw/xstring staging columns have no meaningful text length and are
   skipped
 
+## Excel upload end to end example
+
+The complete pipeline of a file upload (abap2xlsx reads the file →
+string staging → truncation pre-check → validation → display/archive).
+abap2xlsx is a separate third party library
+([abap2xlsx](https://github.com/abap2xlsx/abap2xlsx)) that must be
+installed on its own — this library does **not** depend on it: from
+step 2 on the pipeline is independent of the file source, CSV or
+application server files work the same way:
+
+```abap
+" 1) abap2xlsx reads the worksheet (reader API as of your version)
+DATA(lo_excel) = CAST zif_excel_reader( NEW zcl_excel_reader_2007( )
+                   )->load_file( i_excel2007 = lv_xstring ).
+DATA(lo_sheet) = lo_excel->get_worksheet_by_name( 'Sheet1' ).
+
+" 2) into a string staging table: columns named like the target DDIC
+"    structure (ZSDI_UPLOAD in this example)
+DATA lt_stage TYPE STANDARD TABLE OF ty_stage WITH EMPTY KEY.  " all string columns
+" LOOP AT lo_sheet->... INTO lt_stage.  " or read the cells row by row
+
+" 3) truncation pre-check: warn about overlength values BEFORE the
+"    MOVE into the target structure
+DATA(lt_trunc) = zcl_adv_validator=>precheck_truncation(
+                     it_data = lt_stage iv_typename = 'ZSDI_UPLOAD' ).
+" branch on severity: E back to the user, W ask for confirmation
+
+" 4) MOVE to the target type and validate (rules loaded per scenario
+"    from the customizing table, no code changes)
+DATA lt_upload TYPE STANDARD TABLE OF zsdi_upload WITH EMPTY KEY.
+LOOP AT lt_stage ASSIGNING FIELD-SYMBOL(<ls_stage>).
+  APPEND INITIAL LINE TO lt_upload ASSIGNING FIELD-SYMBOL(<ls_upload>).
+  MOVE-CORRESPONDING <ls_stage> TO <ls_upload>.
+ENDLOOP.
+
+DATA(lo_validator) = NEW zcl_adv_validator( ).
+lo_validator->add_rules_from_db( iv_scenario = 'ZSDI_UPLOAD' ).
+DATA(lt_findings) = lo_validator->validate( lt_upload ).
+
+" 5) display (ALV) + archive (BAL, view with SLG1)
+zcl_adv_validator=>display_findings(
+    it_findings = lt_findings iv_title = 'Upload validation' ).
+zcl_adv_validator=>log_findings(
+    it_findings = lt_findings iv_object = 'ZSDI_UPLOAD' iv_commit = abap_true ).
+```
+
 ## Application log (BAL)
 
 Write findings as an application log readable via SLG1 (one message
@@ -355,6 +403,48 @@ DATA(lv_log_handle) = zcl_adv_validator=>log_findings(
 - the save happens in the current LUW, the commit stays with the
   caller; outside a bigger transaction `iv_commit = abap_true` lets
   the helper commit directly
+
+## Rule customizing table (ZADV_RULES)
+
+Rules without code changes, maintained by consultants and transported
+like customizing: the package ships the client dependent customizing
+table `ZADV_RULES` (delivery class CUS1), one row per rule or key
+field, loaded per **scenario**:
+
+```abap
+DATA(lo_validator) = NEW zcl_adv_validator( ).
+DATA(lv_count) = lo_validator->add_rules_from_db( iv_scenario = 'ZSDI_UPLOAD' ).
+" lv_count = rules loaded; 0 = table missing or scenario empty (no exception)
+
+DATA(lt_findings) = lo_validator->validate( gt_upload ).
+```
+
+Table layout (key: SCENARIO / RULE_ID / FIELDNAME):
+
+| RULE_TYPE | maps to | columns used |
+|---|---|---|
+| `COLUMN` | `add_rule( )` column rule | FIELDNAME + REQUIRED / REGEX / CHECKTABLE + CHECKFIELD / DOMNAME |
+| `COMPARE` | `add_compare_rule( )` row comparison | FIELDNAME (left operand) + OPERATOR (EQ/NE/LT/LE/GT/GE) + OTHER_FIELD (right operand) |
+| `UNIQUE` | `add_unique_rule( )` duplicates | rows sharing a RULE_ID contribute one key field each (FIELDNAME); the alphabetically first is the anchor; a single row is a single field check |
+
+SEVERITY and RULE_ID apply to all three kinds (same semantics as code
+registration). Notes:
+
+- **maintenance**: SE16N directly, or generate a maintenance view in
+  SE11 (SM30); transported with customizing requests — no code
+  changes, no transport of programs
+- **lenient**: unknown RULE_TYPE rows are skipped; a missing table
+  object or an empty scenario returns 0 — the SELECT uses a dynamic
+  table name, so there is **no activation order dependency** between
+  the class and the table
+- unknown field names and invalid operators are NOT skipped:
+  validate( ) reports the usual STRUCTURE findings (003/020), broken
+  configuration shows up on the first run
+- mixes freely with code registration on the same instance, loading
+  only appends; REGEX is a CHAR255 column, longer patterns belong in
+  code
+- demo: `ZADV_DEMO` loads scenario `DEMO` at the start (with a note
+  when there are no rows)
 
 ## The finding structure ty_finding
 
@@ -400,6 +490,43 @@ DATA(lv_log_handle) = zcl_adv_validator=>log_findings(
    instance level caches; `clear_caches( )` discards them after
    customizing changes.
 
+## Slicing and parallel validation of big tables
+
+`validate( )` is slice friendly: with `iv_row_offset` the finding row
+number is offset + position in the slice (structural findings stay
+0), so the results of all slices merge directly:
+
+```abap
+DATA: lt_findings TYPE zcl_adv_validator=>ty_findings,
+      lt_chunk    LIKE gt_upload,
+      lv_off      TYPE i.
+
+WHILE lv_off < lines( gt_upload ).
+  CLEAR lt_chunk.
+  APPEND LINES OF gt_upload
+       FROM lv_off + 1
+         TO nmin( val1 = lv_off + 50000 val2 = lines( gt_upload ) )
+       TO lt_chunk.
+  APPEND LINES OF lo_validator->validate( it_data       = lt_chunk
+                                          iv_row_offset = lv_off )
+       TO lt_findings.
+  lv_off = lv_off + 50000.
+ENDWHILE.
+```
+
+- slicing mainly bounds run time and memory per call; the instance
+  caches survive between slices (one instance over slices queries
+  every distinct check table value only once)
+- **uniqueness rules and slices are mutually exclusive**: `UNIQUE` is
+  evaluated within each `validate( )` call, duplicates across slices
+  are invisible — do not slice when duplicates matter, or
+  pre-aggregate in the database
+- parallel: one **fresh instance** per slice (the validator keeps no
+  shared state, caches are per instance), dispatched via aRFC or
+  background tasks; `iv_row_offset` makes the row numbers mergeable.
+  Gains are biggest where check table round trips dominate; mind the
+  parallel task count and the database connection quota
+
 ## Design trade-offs and limits
 
 - **Foreign key mapping (DD05S)**: the real mapping of DDIC check
@@ -436,13 +563,16 @@ DATA(lv_log_handle) = zcl_adv_validator=>log_findings(
 CHANGELOG.md                             change log
 abaplint.json                            base abaplint rules (static CI checks)
 .github/workflows/abaplint.yml           GitHub Actions: abaplint on push/PR
+.github/workflows/abap-unit.yml          GitHub Actions: activation + ABAP Unit on a self-hosted system (off by default)
+docs/abap-cloud.md                       ABAP Cloud feasibility study
 src/
   package.devc.xml                        package ZADV_VALIDATOR
   zadv_validator.msag.xml                 SE91 message class ZADV_VALIDATOR (001–020)
+  zadv_rules.tabl.xml                     rule customizing table ZADV_RULES (CUS1, transported as customizing)
   zif_adv_metadata.intf.abap              metadata constants interface (version/author/repo/license/description)
   zif_adv_column_check.intf.abap           plugin interface (custom single column checks)
   zcl_adv_validator.clas.abap             the validator (types, constants, methods in one class, implements ZIF_ADV_METADATA)
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit tests (47 cases)
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit tests (50 cases)
   zadv_demo.prog.abap                     demo report
 ```
 
@@ -475,7 +605,11 @@ only columns pass), the BAL message mapping (severity → message type,
 4×50 character chunking, no log without findings), lowercase domains
 and interval fixed values (the sample objects are discovered at
 runtime from DD01L/DD07L — no hardcoded cross release dependencies;
-tests skip automatically on systems without a sample). Application
+tests skip automatically on systems without a sample), the rule
+customizing mapping (COLUMN/COMPARE/UNIQUE mapping incl. the anchor
+rule, unknown types skipped, missing table/empty scenario return 0
+leniently), and the row offset (column level and uniqueness findings
+carry the offset). Application
 DDIC objects (KNA1/MARA/VBAK/VBELN) are always resolved at runtime
 (RTTI built tables, per component assignment) — the test class holds
 no static type references, so minimal systems (no SD/MM) skip those
@@ -505,12 +639,12 @@ data (real check tables such as T001) are covered by the demo.
 - [x] test gap closing: lowercase domains, interval fixed values — no hardcoded sample domains, samples are discovered at runtime from DD01L (lowercase)/DD07L (interval rows), tests skip automatically where no sample exists
 - [x] English README (README_EN.md, mirroring the Chinese one)
 
-### v2.0+ (ecosystem and scenarios)
-- [ ] rule customizing table: validation rules in a customer table, consultant maintainable and transportable, no code changes
-- [ ] end to end Excel upload example (abap2xlsx → staging table → validation → ALV)
-- [ ] ABAP Cloud feasibility study (released objects instead of the DD07L/DD01L/TFDIR reads and the dynamic SQL)
-- [ ] GitHub Actions extension: automatic activation and ABAP Unit on an abapGit trial system (abaplint CI is ready)
-- [ ] batched/parallel validation of large tables
+### v2.0 (ecosystem and scenarios) — done
+- [x] **rule customizing table**: the client dependent customizing table `ZADV_RULES` ships with the package (maintained via SE16N/SM30, transported as customizing, no code changes); `add_rules_from_db( iv_scenario )` loads all three rule kinds per scenario; dynamic SELECT without activation order dependency, missing table/empty scenario return 0 leniently
+- [x] **end to end Excel upload example**: complete pipeline documented in the README (abap2xlsx → string staging → truncation pre-check → validation → ALV/BAL); abap2xlsx is a separate third party library this package does not depend on — from the staging table on, the pipeline is file source independent (CSV/AL11 alike)
+- [x] **ABAP Cloud feasibility study**: see [docs/abap-cloud.md](docs/abap-cloud.md) — conclusion: v2.x stays on-premise (direct DDIC reads, dynamic SQL, SALV and BAL are not released; adapting would mean rewriting the metadata layer); the first step towards Cloud (a metadata provider interface) is recorded
+- [x] **GitHub Actions extension**: the `abap-unit.yml` workflow is ready (after abaplint: abapGit pull + activation + ABAP Unit on a self-hosted runner), enabled via the repository variable `ABAP_RUNNER`; `abaplint.yml` unchanged
+- [x] **sliced/parallel validation of big tables**: `validate( iv_row_offset )` keeps global row numbers across slices (also fixes uniqueness row numbers staying 0 for hashed input tables), the parallel call pattern (one instance per slice, merged via the offset) is documented; the mutual exclusiveness of uniqueness rules and slicing is called out
 
 Explicitly not planned: syntax downport to 7.02 and below (maintenance
 cost outweighs the benefit), multi package splits, replacing RAP

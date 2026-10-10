@@ -1,0 +1,58 @@
+# ABAP Unit on a self-hosted SAP system (abapGit enabled).
+#
+# This job is OFF by default: it only runs when the repository variable
+# ABAP_RUNNER is set to "true" (Settings -> Secrets and variables ->
+# Actions -> Variables) AND a self-hosted runner with the labels
+# [self-hosted, abap] is connected. Without both, GitHub skips the job
+# and the abaplint workflow remains the only gate - exactly the state
+# of this repository today.
+#
+# Runner prerequisites (documented, not enforced by this file):
+#   - an SAP system reachable from the runner (trial/developer edition
+#     is enough for the test suite), user with developer authorization
+#   - the abapGit CLI (https://abapgit.org) on PATH, or adapt the
+#     steps below to your preferred deployment method
+#   - repository secrets: ABAP_HOST, ABAP_CLIENT, ABAP_USER, ABAP_PASS
+#
+# The activation + unit run steps are intentionally explicit commands;
+# adjust them to the CLI version you pin on the runner.
+
+name: abap-unit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  abapunit:
+    if: vars.ABAP_RUNNER == 'true'
+    runs-on: [self-hosted, abap]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: static check first (abaplint)
+        run: npx --yes abaplint
+
+      - name: pull and activate via abapGit CLI
+        env:
+          ABAP_USER: ${{ secrets.ABAP_USER }}
+          ABAP_PASS: ${{ secrets.ABAP_PASS }}
+        run: |
+          abapgit pull \
+            --url "${{ github.server_url }}/${{ github.repository }}.git" \
+            --package ZADV_VALIDATOR \
+            --host "${{ secrets.ABAP_HOST }}" \
+            --client "${{ secrets.ABAP_CLIENT }}"
+
+      - name: run ABAP Unit (ZCL_ADV_VALIDATOR)
+        env:
+          ABAP_USER: ${{ secrets.ABAP_USER }}
+          ABAP_PASS: ${{ secrets.ABAP_PASS }}
+        run: |
+          abapgit abapunit \
+            --class zcl_adv_validator \
+            --host "${{ secrets.ABAP_HOST }}" \
+            --client "${{ secrets.ABAP_CLIENT }}"
