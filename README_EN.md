@@ -408,7 +408,7 @@ DATA(lv_log_handle) = zcl_adv_validator=>log_findings(
 
 Rules without code changes, maintained by consultants and transported
 like customizing: the package ships the client dependent customizing
-table `ZADV_RULES` (delivery class CUS1), one row per rule or key
+table `ZADV_RULES` (delivery class C, data class APPL2), one row per rule or key
 field, loaded per **scenario**:
 
 ```abap
@@ -568,7 +568,7 @@ docs/abap-cloud.md                       ABAP Cloud feasibility study
 src/
   package.devc.xml                        package ZADV_VALIDATOR
   zadv_validator.msag.xml                 SE91 message class ZADV_VALIDATOR (001–020)
-  zadv_rules.tabl.xml                     rule customizing table ZADV_RULES (CUS1, transported as customizing)
+  zadv_rules.tabl.xml                     rule customizing table ZADV_RULES (delivery class C, transported as customizing)
   zif_adv_metadata.intf.abap              metadata constants interface (version/author/repo/license/description)
   zif_adv_column_check.intf.abap           plugin interface (custom single column checks)
   zcl_adv_validator.clas.abap             the validator (types, constants, methods in one class, implements ZIF_ADV_METADATA)

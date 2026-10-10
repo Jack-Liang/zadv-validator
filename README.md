@@ -343,7 +343,7 @@ DATA(lv_log_handle) = zcl_adv_validator=>log_findings(
 ## 规则配置表（ZADV_RULES）
 
 规则可以不改代码、由顾问维护并随传输发布：包内自带客户端相关定制表
-`ZADV_RULES`（定制类 CUS1），每行一条规则或查重键字段，按**场景**加载：
+`ZADV_RULES`（定制传输类 C + 数据类 APPL2），每行一条规则或查重键字段，按**场景**加载：
 
 ```abap
 DATA(lo_validator) = NEW zcl_adv_validator( ).
@@ -467,7 +467,7 @@ docs/abap-cloud.md                       ABAP Cloud 适配可行性调研
 src/
   package.devc.xml                        包 ZADV_VALIDATOR
   zadv_validator.msag.xml                 SE91 消息类 ZADV_VALIDATOR（001–020）
-  zadv_rules.tabl.xml                     规则配置表 ZADV_RULES（定制表 CUS1，随定制请求传输）
+  zadv_rules.tabl.xml                     规则配置表 ZADV_RULES（定制传输类 C，随定制请求传输）
   zif_adv_metadata.intf.abap              元数据常量接口（版本/作者/仓库/许可/描述）
   zif_adv_column_check.intf.abap           校验插件接口（自定义单列校验）
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，实现 ZIF_ADV_METADATA 暴露库元数据）

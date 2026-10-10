@@ -20,7 +20,7 @@ SQL」之上，这两点在 ABAP Cloud 运行时没有 released 的等价物；�
 | BAL 函数组（log_findings） | 应用日志 | 经典 BAL 未 released（Cloud 用应用日志 API 另有体系） |
 | 自建 SE91 消息类 | finding 文本 | 消息类本身在 Cloud 可建，但 `MESSAGE ... INTO` 用法受限 |
 
-另有两个非对象层面的差异：DDIC 定制表（ZADV_RULES 属 CUS1 定制类）在
+另有两个非对象层面的差异：DDIC 定制表（ZADV_RULES 为定制传输类 C）在
 Cloud 侧需重建为 managed 表/场景化配置；abapGit 本身也不面向 Cloud 开发流
 （Cloud 用 abapGit 的 successor：Embrace/ADT 原生传输）。
 

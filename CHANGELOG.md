@@ -2,8 +2,11 @@
 
 ## 未发布（v2.0）
 
+- 修复（真机表激活 DT609）：数据类 `CUS1` 非标准交付值（SAP 仅为客户
+  预留、多数系统未定义），ZADV_RULES 技术设置改为标准数据类 `APPL2`
+  （组织与定制数据）；定制传输属性 `CONTFLAG C`（随定制请求传输）不变
 - 规则配置表（v2.0）：新增客户端相关定制表 `ZADV_RULES`
-  （`zadv_rules.tabl.xml`，定制类 CUS1，SE16N/SM30 维护、随定制请求传输、
+  （`zadv_rules.tabl.xml`，定制传输类 C + 标准数据类 APPL2，SE16N/SM30 维护、随定制请求传输、
   免改代码；键 SCENARIO/RULE_ID/FIELDNAME）与
   `add_rules_from_db( iv_scenario iv_tabname )` 场景化加载：COLUMN 行映射
   `add_rule`（required/regex/checktable+checkfield/domname）、COMPARE 行映射
