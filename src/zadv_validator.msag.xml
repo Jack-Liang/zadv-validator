@@ -98,6 +98,36 @@
      <MSGNR>015</MSGNR>
      <TEXT>Value &apos;&amp;1&apos; does not exist in check table &amp;2 (key &amp;3)</TEXT>
     </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>016</MSGNR>
+     <TEXT>Value &apos;&amp;1&apos; does not fulfill condition &amp;2</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>017</MSGNR>
+     <TEXT>Duplicate value &apos;&amp;1&apos; of &amp;2, first occurrence in row &amp;3</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>018</MSGNR>
+     <TEXT>&amp;1&amp;2&amp;3&amp;4</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>019</MSGNR>
+     <TEXT>Value of &amp;1 would be truncated (length &amp;2 exceeds &amp;3)</TEXT>
+    </T100>
+    <T100>
+     <SPRSL>E</SPRSL>
+     <ARBGB>ZADV_VALIDATOR</ARBGB>
+     <MSGNR>020</MSGNR>
+     <TEXT>Invalid operator &amp;1 in comparison rule</TEXT>
+    </T100>
    </T100>
   </asx:values>
  </asx:abap>

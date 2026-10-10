@@ -10,6 +10,11 @@ REPORT zadv_demo.
 "* demo still activates on minimal systems - the sections are skipped
 "* with a note when the object does not exist.
 "*
+"* v1.1 features ride along on the upload table: declarative cross
+"* field comparison (BUDAT <= DATE_TO), file level duplicate check
+"* (REF_ID), application log (BAL) and the string staging truncation
+"* pre-check (against DD01L, which exists on every system).
+"*
 "* The demo deliberately avoids SELECTs on customizing tables so it
 "* activates on every system (trial/developer editions often lack T001
 "* etc.). Check-table findings appear only where the check table is
@@ -17,13 +22,15 @@ REPORT zadv_demo.
 "* value pass instead of raising an error.
 
 TYPES: BEGIN OF ty_upload,
-         status TYPE as4local,  " domain AS4LOCAL: fixed values A/N/I
-         budat  TYPE budat,     " DATS format check
-         bukrs  TYPE bukrs,     " check table T001
-         land1  TYPE land1,     " check table T005
-         waers  TYPE waers,     " check table TCURC
-         email  TYPE string,    " non DDIC field -> regex rule
-         remark TYPE string,    " non DDIC field -> required rule
+         status  TYPE as4local,  " domain AS4LOCAL: fixed values A/N/I
+         budat   TYPE budat,     " DATS format check
+         date_to TYPE budat,     " comparison rule operand
+         bukrs   TYPE bukrs,     " check table T001
+         land1   TYPE land1,     " check table T005
+         waers   TYPE waers,     " check table TCURC
+         email   TYPE string,    " non DDIC field -> regex rule
+         remark  TYPE string,    " non DDIC field -> required rule
+         ref_id  TYPE string,    " non DDIC field -> unique rule
        END OF ty_upload.
 
 DATA gt_upload TYPE STANDARD TABLE OF ty_upload WITH EMPTY KEY.
@@ -157,18 +164,23 @@ START-OF-SELECTION.
   DATA(lv_invalid_date) = `20261301`.
 
   gt_upload = VALUE #(
-    " row 1: values that are valid on most systems
-    ( status = 'A' budat = sy-datum bukrs = '1000' land1 = 'DE'
-      waers = 'EUR' email = 'dev@example.com' remark = 'typical valid row' )
+    " row 1: values that are valid on most systems; REF_ID first use
+    ( status = 'A' budat = sy-datum date_to = sy-datum bukrs = '1000'
+      land1 = 'DE' waers = 'EUR' email = 'dev@example.com'
+      remark = 'typical valid row' ref_id = 'R-001' )
 
     " row 2: wrong domain value, wrong date, unknown check-table values,
-    "        failing regex, missing required remark
-    ( status = 'Z' budat = lv_invalid_date bukrs = 'ZZZZ' land1 = 'ZZ'
-      waers = 'ZZZ' email = 'not-an-email' remark = '' )
+    "        failing regex, missing required remark, BUDAT > DATE_TO
+    "        (comparison rule), REF_ID reuse of row 1 (unique rule)
+    ( status = 'Z' budat = lv_invalid_date date_to = '20260101'
+      bukrs = 'ZZZZ' land1 = 'ZZ' waers = 'ZZZ' email = 'not-an-email'
+      remark = '' ref_id = 'R-001' )
 
-    " row 3: everything fine except the domain value
+    " row 3: everything fine except the domain value; DATE_TO initial
+    "        -> comparison skipped (mark required to catch that)
     ( status = 'Z' budat = sy-datum bukrs = '1000' land1 = 'DE'
-      waers = 'EUR' email = 'fine@example.com' remark = 'only flag wrong' ) ).
+      waers = 'EUR' email = 'fine@example.com' remark = 'only flag wrong'
+      ref_id = 'R-002' ) ).
 
   DATA(lo_validator) = NEW zcl_adv_validator( ).
 
@@ -176,6 +188,18 @@ START-OF-SELECTION.
   lo_validator->add_rules( VALUE #(
     ( fieldname = 'EMAIL'  regex = `^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$` )
     ( fieldname = 'REMARK' required = abap_true ) ) ).
+
+  " declarative cross field comparison: BUDAT must not be after
+  " DATE_TO; initial operands are skipped, severity W
+  lo_validator->add_compare_rule( VALUE #( field    = 'BUDAT'
+                                           operator = 'LE'
+                                           other    = 'DATE_TO'
+                                           severity = 'W'
+                                           rule_id  = 'R_PERIOD' ) ).
+
+  " declarative file level duplicate check on REF_ID
+  lo_validator->add_unique_rule( VALUE #( field   = 'REF_ID'
+                                          rule_id = 'R_DUP_REF' ) ).
 
   " register a custom column check (plugin) for EMAIL, see the local
   " class lcl_check_example_domain above
@@ -229,6 +253,52 @@ START-OF-SELECTION.
                          ( fieldname = 'WAERS' value = 'EUR' ) ) )
       ( cells = VALUE #( ( fieldname = 'NETWR' value = '1' )
                          ( fieldname = 'WAERS' value = 'ZZZ9' ) ) ) ) ).
+
+  " ---------------------------------------------------------------------
+  " staging pre-check: string values vs. the field lengths of a target
+  " DDIC structure (DD01L exists everywhere: DOMNAME CHAR30, AS4LOCAL
+  " CHAR1). Values that a MOVE to the target would truncate silently
+  " are reported as warnings before they reach the database
+  " ---------------------------------------------------------------------
+  TYPES: BEGIN OF ty_stage,
+           domname  TYPE string,
+           as4local TYPE string,
+         END OF ty_stage,
+         ty_stages TYPE STANDARD TABLE OF ty_stage WITH EMPTY KEY.
+
+  DATA(lv_overlength) = `ABCDEFGHIJKLMNOPQRSTUVWXYZ01234`.
+
+  WRITE: / `string staging truncation pre-check (target DD01L)`.
+  ULINE.
+  LOOP AT zcl_adv_validator=>precheck_truncation(
+             it_data     = VALUE ty_stages(
+                             ( domname = `AS4LOCAL` as4local = `A` )
+                             ( domname = lv_overlength as4local = `AB` ) )
+             iv_typename = 'DD01L' )
+       INTO DATA(ls_trunc).
+    WRITE: / `  row`, ls_trunc-row, ls_trunc-fieldname, ls_trunc-value,
+             ls_trunc-severity, ls_trunc-check_type.
+  ENDLOOP.
+  SKIP.
+
+  " ---------------------------------------------------------------------
+  " application log (BAL): the upload findings as a persistent log,
+  " one message per finding, message type from the severity. View it
+  " with SLG1; the object must be registered in SLG0 first (or pass
+  " an object of your own)
+  " ---------------------------------------------------------------------
+  DATA(lv_log_handle) = zcl_adv_validator=>log_findings(
+      it_findings = lt_findings
+      iv_object   = 'ZADV_DEMO'
+      iv_commit   = abap_true ).
+
+  IF lv_log_handle IS INITIAL.
+    WRITE: / `application log: nothing written (empty findings or object`,
+           `ZADV_DEMO not registered in SLG0)`.
+  ELSE.
+    WRITE: / `application log written, see SLG1 (object ZADV_DEMO)`.
+  ENDIF.
+  SKIP.
 
   " findings of the upload demo -> SALV via the built-in helper
   " (classic list fallback is part of the helper)

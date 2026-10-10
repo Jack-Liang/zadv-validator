@@ -6,10 +6,12 @@ CLASS ltcl_validate DEFINITION FINAL
 
   PRIVATE SECTION.
     TYPES: BEGIN OF ty_row,
-             status TYPE as4local,  " domain AS4LOCAL: fixed values A/N/I
-             date   TYPE budat,     " DATS
-             time   TYPE uzeit,     " TIMS
-             mail   TYPE string,    " non DDIC -> only usable via rules
+             status    TYPE as4local,  " domain AS4LOCAL: fixed values A/N/I
+             date      TYPE budat,     " DATS
+             time      TYPE uzeit,     " TIMS
+             mail      TYPE string,    " non DDIC -> only usable via rules
+             date_from TYPE budat,     " comparison rule demo operand
+             date_to   TYPE budat,     " comparison rule demo operand
            END OF ty_row,
            ty_rows TYPE STANDARD TABLE OF ty_row WITH EMPTY KEY.
 
@@ -58,6 +60,19 @@ CLASS ltcl_validate DEFINITION FINAL
       plugin_custom_check      FOR TESTING,
       plugin_unknown_field     FOR TESTING,
       plugin_cross_field       FOR TESTING,
+      compare_rule_violated    FOR TESTING,
+      compare_rule_ok_initial  FOR TESTING,
+      compare_rule_unknown_field FOR TESTING,
+      compare_rule_bad_operator FOR TESTING,
+      unique_rule_flags_duplicates FOR TESTING,
+      unique_rule_initial_exempt  FOR TESTING,
+      unique_rule_unknown_field   FOR TESTING,
+      truncation_overlength   FOR TESTING,
+      truncation_ok           FOR TESTING,
+      lowercase_domain_internal FOR TESTING,
+      interval_domain_values  FOR TESTING,
+      bal_msg_mapping         FOR TESTING,
+      bal_log_empty_findings  FOR TESTING,
 
       "! builds a standard table of the named DDIC structure at runtime;
       "! an unbound result means the type does not exist on this system
@@ -72,6 +87,11 @@ CLASS ltcl_validate DEFINITION FINAL
         IMPORTING ir_table TYPE REF TO data
                   it_cells TYPE ty_cells.
 ENDCLASS.
+
+"* white box access for the tests that exercise private helpers
+"* (internal_value case folding, build_bal_msgs message mapping);
+"* local friends is the standard pattern for the test class include
+CLASS zcl_adv_validator DEFINITION LOCAL FRIENDS ltcl_validate.
 
 
 "* two reference implementations of the column check plugin interface:
@@ -843,6 +863,359 @@ CLASS ltcl_validate IMPLEMENTATION.
         msg = 'cross field plugin finding expected' ).
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lt_findings[ 1 ]-row ).
+  ENDMETHOD.
+
+
+  METHOD compare_rule_violated.
+    " DATE_FROM <= DATE_TO as a declarative cross field rule: only the
+    " violated row is reported, on the left operand field, with the
+    " rule severity and rule id echoed
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_compare_rule( VALUE #( field    = 'DATE_FROM'
+                                             operator = 'LE'
+                                             other    = 'DATE_TO'
+                                             severity = 'W'
+                                             rule_id  = 'R_PERIOD' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows(
+      ( date_from = '20261010' date_to = '20261001' )
+      ( date_from = '20261010' date_to = '20261011' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'only the violated comparison must be reported' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-compare )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'DATE_FROM' act = CONV string( lt_findings[ 1 ]-fieldname ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = |DATE_FROM <= DATE_TO|
+        act = CONV string( lt_findings[ 1 ]-object ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'W' act = CONV string( lt_findings[ 1 ]-severity )
+        msg = 'rule severity W must reach the finding' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'R_PERIOD' act = CONV string( lt_findings[ 1 ]-rule_id ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lt_findings[ 1 ]-row ).
+  ENDMETHOD.
+
+
+  METHOD compare_rule_ok_initial.
+    " initial operands are exempt (mark them required instead) and a
+    " satisfied comparison passes - no finding either way
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_compare_rule( VALUE #( field    = 'DATE_FROM'
+                                             operator = 'LE'
+                                             other    = 'DATE_TO' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows(
+      ( date_from = '20261010' )
+      ( date_from = '20261001' date_to = '20261010' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 0 act = lines( lt_findings )
+        msg = 'initial operand and satisfied comparison must both pass' ).
+  ENDMETHOD.
+
+
+  METHOD compare_rule_unknown_field.
+    " operands that do not exist are structural findings, same 003
+    " path as column rules
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_compare_rule( VALUE #( field    = 'DATE_FROM'
+                                             operator = 'LE'
+                                             other    = 'DOES_NOT_EXIST' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows( ( ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'unknown comparison operand not reported' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-structure )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'DOES_NOT_EXIST' act = CONV string( lt_findings[ 1 ]-fieldname ) ).
+  ENDMETHOD.
+
+
+  METHOD compare_rule_bad_operator.
+    " an operator outside EQ NE LT LE GT GE is a structural finding
+    " (message 020), not a silent skip
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_compare_rule( VALUE #( field    = 'DATE_FROM'
+                                             operator = 'XX'
+                                             other    = 'DATE_TO' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows( ( ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'invalid operator not reported' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-structure )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'DATE_FROM' act = CONV string( lt_findings[ 1 ]-fieldname ) ).
+  ENDMETHOD.
+
+
+  METHOD unique_rule_flags_duplicates.
+    " STATUS+MAIL must stay unique across the table: first occurrence
+    " passes, the repeat is reported on the anchor field; the
+    " combination is reported in sorted field order
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_unique_rule( VALUE #(
+        field   = 'STATUS'
+        fields  = VALUE #( ( `STATUS` ) ( `MAIL` ) )
+        rule_id = 'R_DUP_KEY' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows(
+      ( status = 'A' mail = 'x@y' )
+      ( status = 'A' mail = 'x@y' )
+      ( status = 'B' mail = 'x@y' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'only the repeated combination must be reported' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-unique )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'STATUS' act = CONV string( lt_findings[ 1 ]-fieldname )
+        msg = 'finding anchors on the declared field' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = |MAIL+STATUS| act = CONV string( lt_findings[ 1 ]-object )
+        msg = 'combination is reported in sorted field order' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'x@y/A' act = CONV string( lt_findings[ 1 ]-value )
+        msg = 'value shows the combination, sorted field order' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lt_findings[ 1 ]-row ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'R_DUP_KEY' act = CONV string( lt_findings[ 1 ]-rule_id ) ).
+  ENDMETHOD.
+
+
+  METHOD unique_rule_initial_exempt.
+    " rows in which all fields of the rule are initial are exempt, in
+    " line with "initial values pass" everywhere else; single anchor
+    " field without an explicit fields list works as well
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_unique_rule( VALUE #( field = 'STATUS' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows(
+      ( mail = 'a' )
+      ( mail = 'b' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 0 act = lines( lt_findings )
+        msg = 'all-initial key rows must be exempt from duplicate checks' ).
+  ENDMETHOD.
+
+
+  METHOD unique_rule_unknown_field.
+    " field names that do not exist are structural findings, same 003
+    " path as everywhere else
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_unique_rule( VALUE #( field = 'DOES_NOT_EXIST' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows( ( ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'unknown uniqueness field not reported' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-structure )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+  ENDMETHOD.
+
+
+  METHOD truncation_overlength.
+    " string staging rows against DD01L (DOMNAME CHAR30, AS4LOCAL
+    " CHAR1): overlength values are reported as W before they are
+    " silently truncated by the assignment; raw staging columns have
+    " no text length and are skipped
+    TYPES: BEGIN OF ty_stage,
+             domname  TYPE string,
+             as4local TYPE string,
+             raw_blob TYPE xstring,
+           END OF ty_stage,
+           ty_stages TYPE STANDARD TABLE OF ty_stage WITH EMPTY KEY.
+
+    DATA(lv31) = `ABCDEFGHIJKLMNOPQRSTUVWXYZ01234`.
+
+    DATA(lt_findings) = zcl_adv_validator=>precheck_truncation(
+        it_data     = VALUE ty_stages(
+                        ( domname = `AS4LOCAL` as4local = `A`
+                          raw_blob = 'FF' )
+                        ( domname = lv31 as4local = `AB` ) )
+        iv_typename = 'DD01L' ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lines( lt_findings )
+        msg = 'DOMNAME (31>30) and AS4LOCAL (2>1) of row 2 must be found' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lt_findings[ 1 ]-row ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-truncation )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'W' act = CONV string( lt_findings[ 1 ]-severity )
+        msg = 'truncation pre-check defaults to warning severity' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'DOMNAME' act = CONV string( lt_findings[ 1 ]-fieldname ) ).
+  ENDMETHOD.
+
+
+  METHOD truncation_ok.
+    " values that fit and staging columns the target does not have are
+    " never reported
+    TYPES: BEGIN OF ty_stage,
+             domname  TYPE string,
+             as4local TYPE string,
+             extra    TYPE string,
+           END OF ty_stage,
+           ty_stages TYPE STANDARD TABLE OF ty_stage WITH EMPTY KEY.
+
+    DATA(lv30) = `ABCDEFGHIJKLMNOPQRSTUVWXYZ0123`.
+
+    DATA(lt_findings) = zcl_adv_validator=>precheck_truncation(
+        it_data     = VALUE ty_stages(
+                        ( domname = lv30 as4local = `A` extra = lv30 ) )
+        iv_typename = 'DD01L' ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 0 act = lines( lt_findings )
+        msg = 'fitting values and extra staging columns must pass' ).
+  ENDMETHOD.
+
+
+  METHOD lowercase_domain_internal.
+    " white box test of the case folding rule: with a lowercase domain
+    " the comparison value stays as entered, with a regular domain it
+    " is folded to upper case (this is what check table lookups and
+    " domain fixed values compare with). No hardcoded domain: any
+    " active lowercase domain of this system is discovered at runtime,
+    " systems without one skip the test
+    SELECT SINGLE domname FROM dd01l
+           WHERE as4local = 'A' AND lowercase = 'X'
+           INTO @DATA(lv_lower_dom).
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+
+    DATA ls_field TYPE zcl_adv_validator=>ty_field.
+    ls_field-domname = lv_lower_dom.
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = `MixedCase`
+        act = lo_validator->internal_value( is_field = ls_field
+                                            iv_disp  = `MixedCase` )
+        msg = |domain { lv_lower_dom } is lowercase and must keep the case| ).
+
+    CLEAR ls_field.
+    ls_field-domname = 'AS4LOCAL'.
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = `MIXEDCASE`
+        act = lo_validator->internal_value( is_field = ls_field
+                                            iv_disp  = `MixedCase` )
+        msg = 'regular domains fold the value to upper case' ).
+  ENDMETHOD.
+
+
+  METHOD interval_domain_values.
+    " fixed value intervals (DOMVALUE_H filled): a value equal to the
+    " upper bound is only accepted when the interval logic works -
+    " single value logic would reject it, because it is not the start
+    " of its own row. The sample domain is discovered at runtime from
+    " dd07l, systems without any interval domain skip the test
+    SELECT SINGLE domname, domvalue_l AS low, domvalue_h AS high
+      FROM dd07l
+      WHERE as4local = 'A'
+        AND domvalue_h <> @space
+        AND domvalue_l <> domvalue_h
+      INTO @DATA(ls_interval).
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+
+    " white box on purpose: check_domain( ) is exactly the interval
+    " logic, without the data element side effects (conversion exits,
+    " element check tables) a randomly discovered element might carry
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = abap_true
+        act = lo_validator->check_domain(
+                  iv_domname = ls_interval-domname
+                  iv_value    = CONV #( ls_interval-low ) )
+        msg = |{ ls_interval-low } must be valid for { ls_interval-domname }| ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = abap_true
+        act = lo_validator->check_domain(
+                  iv_domname = ls_interval-domname
+                  iv_value    = CONV #( ls_interval-high ) )
+        msg = |{ ls_interval-high } is the interval end and must be valid| ).
+  ENDMETHOD.
+
+
+  METHOD bal_msg_mapping.
+    " white box test of the BAL message mapping: message type from the
+    " severity, generic message 018, text chunked over the four 50
+    " character message variables (SE91 placeholders hold 50 chars)
+    DATA(lv_long) = repeat( val = 'x' occ = 160 ).
+
+    DATA(lt_findings) = VALUE zcl_adv_validator=>ty_findings(
+      ( severity = 'E' message = 'short text' )
+      ( severity = 'W' message = lv_long ) ).
+
+    DATA(lt_msgs) = zcl_adv_validator=>build_bal_msgs( lt_findings ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lines( lt_msgs )
+        msg = 'one BAL message per finding' ).
+
+    READ TABLE lt_msgs INTO DATA(ls_msg1) INDEX 1.
+    cl_abap_unit_assert=>assert_subrc( ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'E' act = CONV string( ls_msg1-msgty ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = '018' act = CONV string( ls_msg1-msgno ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'short text' act = CONV string( ls_msg1-msgv1 ) ).
+
+    READ TABLE lt_msgs INTO DATA(ls_msg2) INDEX 2.
+    cl_abap_unit_assert=>assert_subrc( ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'W' act = CONV string( ls_msg2-msgty ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 50 act = strlen( CONV string( ls_msg2-msgv1 ) ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 50 act = strlen( CONV string( ls_msg2-msgv2 ) ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 50 act = strlen( CONV string( ls_msg2-msgv3 ) ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 10 act = strlen( CONV string( ls_msg2-msgv4 ) )
+        msg = '160 characters split into 50/50/50/10' ).
+  ENDMETHOD.
+
+
+  METHOD bal_log_empty_findings.
+    " no findings -> no log at all, and no database activity the unit
+    " test would have to clean up (the writing path itself needs a
+    " registered BAL object and is demoed in ZADV_DEMO instead)
+    cl_abap_unit_assert=>assert_initial(
+        act = zcl_adv_validator=>log_findings(
+                  it_findings = VALUE #( )
+                  iv_object   = 'ZADV_UNIT_TEST' )
+        msg = 'empty findings must not create a log' ).
   ENDMETHOD.
 
 

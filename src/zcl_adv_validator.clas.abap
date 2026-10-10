@@ -56,7 +56,40 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       "! the row type: 'BUKRS' (C literal) fits neither C(30) nor string,
       "! so callers must use backtick string literals:
       "! only_fields( VALUE #( ( `BUKRS` ) ) ).
-      ty_fieldnames TYPE HASHED TABLE OF string WITH UNIQUE KEY table_line.
+      ty_fieldnames TYPE HASHED TABLE OF string WITH UNIQUE KEY table_line,
+
+      "! operators of a declarative comparison rule: EQ NE LT LE GT GE
+      ty_operator TYPE c LENGTH 2,
+
+      "! Declarative cross field comparison of one row, e.g.
+      "! DATE_FROM <= DATE_TO. The comparison is skipped whenever one of
+      "! the operands is initial (mark the fields required instead).
+      "! 'field' is the left operand and carries the finding, 'other' is
+      "! the right operand of the same row.
+      BEGIN OF ty_compare_rule,
+        rule_id  TYPE c LENGTH 30,
+        severity TYPE ty_severity,
+        field    TYPE fieldname,
+        operator TYPE ty_operator,
+        other    TYPE fieldname,
+      END OF ty_compare_rule,
+      ty_compare_rules TYPE STANDARD TABLE OF ty_compare_rule WITH EMPTY KEY,
+
+      "! Declarative duplicate check across the whole table (file level
+      "! uniqueness): the combination of 'fields' must not repeat - the
+      "! first occurrence passes, every later one is reported. An empty
+      "! fields list means just the anchor field. Rows in which all
+      "! fields of the rule are initial are exempt (initial passes).
+      "! The combination is evaluated in field name order (sorted), so
+      "! finding-value/object are deterministic regardless of the order
+      "! the fields were registered in.
+      BEGIN OF ty_unique_rule,
+        rule_id  TYPE c LENGTH 30,
+        severity TYPE ty_severity,
+        field    TYPE fieldname,
+        fields   TYPE ty_fieldnames,
+      END OF ty_unique_rule,
+      ty_unique_rules TYPE STANDARD TABLE OF ty_unique_rule WITH EMPTY KEY.
 
     CONSTANTS:
       "! Categories reported in ty_finding-check_type
@@ -70,6 +103,9 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         numc       TYPE c LENGTH 12 VALUE 'NUMC',
         regex      TYPE c LENGTH 12 VALUE 'REGEX',
         plugin     TYPE c LENGTH 12 VALUE 'PLUGIN',
+        compare    TYPE c LENGTH 12 VALUE 'COMPARE',
+        unique     TYPE c LENGTH 12 VALUE 'UNIQUE',
+        truncation TYPE c LENGTH 12 VALUE 'TRUNCATION',
       END OF c_check,
 
       "! severities reported in ty_finding-severity
@@ -110,6 +146,35 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
 
       "! discard all column check registrations (add_column_check)
       clear_column_checks,
+
+      "! register a declarative cross field comparison (row level, e.g.
+      "! DATE_FROM <= DATE_TO). Runs for every row regardless of the
+      "! column filters; operands that are initial are skipped. Field
+      "! names and the operator are normalized to upper case. Unknown
+      "! fields and unknown operators are reported as STRUCTURE findings
+      "! by validate( ). severity defaults to 'E', rule_id is echoed.
+      add_compare_rule
+        IMPORTING is_rule TYPE ty_compare_rule,
+
+      add_compare_rules
+        IMPORTING it_rules TYPE ty_compare_rules,
+
+      "! discard all comparison rule registrations
+      clear_compare_rules,
+
+      "! register a declarative duplicate check (file level uniqueness
+      "! of a field combination). Runs on the whole table regardless of
+      "! the column filters; rows whose rule fields are all initial are
+      "! exempt. An empty fields list means just the anchor field.
+      "! Unknown field names are reported as STRUCTURE findings.
+      add_unique_rule
+        IMPORTING is_rule TYPE ty_unique_rule,
+
+      add_unique_rules
+        IMPORTING it_rules TYPE ty_unique_rules,
+
+      "! discard all uniqueness rule registrations
+      clear_unique_rules,
 
       "! Restrict validation to the given columns (initial = all columns).
       "! Rules on other columns are skipped as well. Unknown names are
@@ -159,7 +224,36 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       "! caller's choice.
       display_findings
         IMPORTING it_findings TYPE ty_findings
-                  iv_title    TYPE clike OPTIONAL.
+                  iv_title    TYPE clike OPTIONAL,
+
+      "! write findings into an application log (BAL) and save it: one
+      "! message per finding, message type from severity, the finding
+      "! text split over the four 50 char message variables. Returns
+      "! the log handle, or initial when nothing was written (no
+      "! findings, object not registered in SLG0, BAL error). Never
+      "! raises - check SLG1 for the result. The save happens in the
+      "! current LUW; iv_commit = abap_true adds a COMMIT WORK for
+      "! callers that do not run inside a bigger transaction.
+      log_findings
+        IMPORTING it_findings    TYPE ty_findings
+                  iv_object      TYPE balobj_d
+                  iv_subobject   TYPE balsubobj OPTIONAL
+                  iv_extnumber   TYPE balnrext OPTIONAL
+                  iv_commit      TYPE abap_bool OPTIONAL
+        RETURNING VALUE(rv_log_handle) TYPE balloghndl,
+
+      "! staging pre-check: character-like columns of it_data (e.g. a
+      "! string staging table of a file upload) are compared with the
+      "! field lengths of the DDIC table/structure iv_typename - values
+      "! that would be truncated by the assignment are reported as W
+      "! findings (iv_severity overrides, E/W/I). Only columns that
+      "! exist under the same name in both structures are checked,
+      "! non character-like target types (amounts, raw) are skipped.
+      precheck_truncation
+        IMPORTING it_data            TYPE ANY TABLE
+                  iv_typename        TYPE clike
+                  iv_severity        TYPE ty_severity OPTIONAL
+        RETURNING VALUE(rt_findings) TYPE ty_findings.
 
   PRIVATE SECTION.
 
@@ -252,6 +346,17 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       ty_plugins TYPE SORTED TABLE OF ty_plugin
                    WITH NON-UNIQUE KEY fieldname,
 
+      "! one BAL message per finding, see build_bal_msgs
+      ty_bal_msgs TYPE STANDARD TABLE OF bal_s_msg WITH EMPTY KEY,
+
+      "! duplicate detection: first row in which a key combination
+      "! occurred (hashed lookup while the rows are scanned in order)
+      BEGIN OF ty_dup_seen,
+        key       TYPE string,
+        first_row TYPE i,
+      END OF ty_dup_seen,
+      ty_dup_seens TYPE HASHED TABLE OF ty_dup_seen WITH UNIQUE KEY key,
+
       "! internal-format values to look up in one check table column,
       "! deduplicated (hashed) and as index table for chunked iteration
       ty_values    TYPE STANDARD TABLE OF string WITH EMPTY KEY,
@@ -299,11 +404,27 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       c_msgid TYPE ty_msgid VALUE 'ZADV_VALIDATOR',
       "! values per dynamic IN( ) batch: small enough for any database
       "! IN list and statement size limit
-      c_in_chunk TYPE i VALUE 100.
+      c_in_chunk TYPE i VALUE 100,
+
+      "! character-like DDIC datatypes whose values truncate silently
+      "! (on the right) when assigned to a shorter target
+      BEGIN OF c_charlike,
+        char  TYPE dfies-datatype VALUE 'CHAR',
+        numc  TYPE dfies-datatype VALUE 'NUMC',
+        dats  TYPE dfies-datatype VALUE 'DATS',
+        tims  TYPE dfies-datatype VALUE 'TIMS',
+        accp  TYPE dfies-datatype VALUE 'ACCP',
+        lang  TYPE dfies-datatype VALUE 'LANG',
+        unit  TYPE dfies-datatype VALUE 'UNIT',
+        cuky  TYPE dfies-datatype VALUE 'CUKY',
+        clnt  TYPE dfies-datatype VALUE 'CLNT',
+      END OF c_charlike.
 
     DATA:
       mt_rules          TYPE ty_rules,
       mt_plugins        TYPE ty_plugins,
+      mt_compare_rules  TYPE ty_compare_rules,
+      mt_unique_rules   TYPE ty_unique_rules,
       mt_only_fields    TYPE ty_fieldnames,
       mt_exclude_fields TYPE ty_fieldnames,
       mt_domains        TYPE ty_domains,
@@ -313,12 +434,6 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       mt_convexits      TYPE ty_convexits.
 
     METHODS:
-      "! normalize a rule severity: initial and invalid values become
-      "! c_severity-error, 'W' and 'I' pass through
-      normalize_severity
-        IMPORTING iv_severity        TYPE clike
-        RETURNING VALUE(rv_severity) TYPE ty_severity,
-
       build_fields
         IMPORTING io_struct        TYPE REF TO cl_abap_structdescr
         RETURNING VALUE(rt_fields) TYPE ty_fields,
@@ -447,7 +562,30 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
 
       conv_exit_exists
         IMPORTING iv_convexit      TYPE convexit
-        RETURNING VALUE(rv_ok)     TYPE abap_bool.
+        RETURNING VALUE(rv_ok)     TYPE abap_bool,
+
+      "! declarative cross field comparisons of one row. Unknown fields
+      "! and unknown operators were reported as structural findings
+      "! before the row loop and are skipped here; initial operands are
+      "! exempt (mark the fields required instead)
+      compare_findings
+        IMPORTING iv_row             TYPE i
+                  iv_struct          TYPE any
+        RETURNING VALUE(rt_findings) TYPE ty_findings,
+
+      "! duplicate findings of all uniqueness rules: rows are scanned
+      "! in table order, the first occurrence of a combination passes,
+      "! every later one is reported
+      unique_findings
+        IMPORTING it_data            TYPE ANY TABLE
+        RETURNING VALUE(rt_findings) TYPE ty_findings,
+
+      "! effective field combination of a uniqueness rule: the explicit
+      "! fields list, or just the anchor field when no list was given;
+      "! upper case, sorted and deduplicated for a deterministic key
+      unique_fields
+        IMPORTING is_rule           TYPE ty_unique_rule
+        RETURNING VALUE(rt_fields)  TYPE ty_values.
 
     "! static on purpose: it is called via short form from the static
     "! check_value_* methods (instance methods cannot be called that
@@ -458,6 +596,21 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
                   iv_rollname  TYPE clike
         EXPORTING es_finding   TYPE ty_finding
         RETURNING VALUE(rv_ok) TYPE abap_bool,
+
+      "! normalize a rule severity: initial and invalid values become
+      "! c_severity-error, 'W' and 'I' pass through. Static on purpose:
+      "! build_bal_msgs( ) runs in a static context
+      normalize_severity
+        IMPORTING iv_severity        TYPE clike
+        RETURNING VALUE(rv_severity) TYPE ty_severity,
+
+      "! findings as BAL messages: message type from severity, the
+      "! finding text split into the four 50 char message variables of
+      "! generic message 018. Pure mapping, no BAL calls - this is what
+      "! log_findings( ) writes and what the unit tests check
+      build_bal_msgs
+        IMPORTING it_findings   TYPE ty_findings
+        RETURNING VALUE(rt_msgs) TYPE ty_bal_msgs,
 
       "! finding message text from the SE91 message class; operands for
       "! unused placeholders are supplied blank. clike by reference on
@@ -566,6 +719,55 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                         severity  = c_severity-error )
                TO rt_findings.
       ENDIF.
+    ENDLOOP.
+
+    " ---------------------------------------------------------------------
+    " 3.7) declarative comparison rules: operator must be known, both
+    "      operands must exist; uniqueness rules: fields must exist
+    " ---------------------------------------------------------------------
+    LOOP AT mt_compare_rules ASSIGNING FIELD-SYMBOL(<fs_crchk>).
+      IF <fs_crchk>-operator <> 'EQ' AND <fs_crchk>-operator <> 'NE'
+         AND <fs_crchk>-operator <> 'LT' AND <fs_crchk>-operator <> 'LE'
+         AND <fs_crchk>-operator <> 'GT' AND <fs_crchk>-operator <> 'GE'.
+        APPEND VALUE #( row = 0 fieldname = <fs_crchk>-field
+                        check_type = c_check-structure
+                        message   = build_msg( iv_nr = '020'
+                                                iv_a  = <fs_crchk>-operator )
+                        severity  = c_severity-error )
+               TO rt_findings.
+      ENDIF.
+      ASSIGN COMPONENT <fs_crchk>-field OF STRUCTURE <row> TO <val>.
+      IF sy-subrc <> 0.
+        APPEND VALUE #( row = 0 fieldname = <fs_crchk>-field
+                        check_type = c_check-structure
+                        message   = build_msg( iv_nr = '003'
+                                                iv_a  = <fs_crchk>-field )
+                        severity  = c_severity-error )
+               TO rt_findings.
+      ENDIF.
+      ASSIGN COMPONENT <fs_crchk>-other OF STRUCTURE <row> TO <val>.
+      IF sy-subrc <> 0.
+        APPEND VALUE #( row = 0 fieldname = <fs_crchk>-other
+                        check_type = c_check-structure
+                        message   = build_msg( iv_nr = '003'
+                                                iv_a  = <fs_crchk>-other )
+                        severity  = c_severity-error )
+               TO rt_findings.
+      ENDIF.
+    ENDLOOP.
+
+    LOOP AT mt_unique_rules ASSIGNING FIELD-SYMBOL(<fs_urchk>).
+      LOOP AT unique_fields( <fs_urchk> ) INTO DATA(lv_ufield).
+        ASSIGN COMPONENT lv_ufield OF STRUCTURE <row> TO <val>.
+        IF sy-subrc <> 0.
+          APPEND VALUE #( row = 0 fieldname = lv_ufield
+                          check_type = c_check-structure
+                          message   = build_msg( iv_nr = '003'
+                                                  iv_a  = lv_ufield )
+                          severity  = c_severity-error )
+                 TO rt_findings.
+        ENDIF.
+      ENDLOOP.
     ENDLOOP.
 
     " ---------------------------------------------------------------------
@@ -796,7 +998,18 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         ENDLOOP.
 
       ENDLOOP.
+
+      " declarative cross field comparisons of this row. They are row
+      " level rules and run independently of the column filters and of
+      " the per-field first-error-wins chain above
+      APPEND LINES OF compare_findings( iv_row   = lv_row
+                                        iv_struct = <row> ) TO rt_findings.
     ENDLOOP.
+
+    " ---------------------------------------------------------------------
+    " 6) file level duplicate rules (first occurrence passes)
+    " ---------------------------------------------------------------------
+    APPEND LINES OF unique_findings( it_data ) TO rt_findings.
 
   ENDMETHOD.
 
@@ -825,6 +1038,56 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
   METHOD clear_column_checks.
     CLEAR mt_plugins.
+  ENDMETHOD.
+
+
+  METHOD add_compare_rule.
+    " upper case on purpose: structure components and the operator set
+    " are upper case, callers may pass any case
+    APPEND VALUE #( rule_id  = is_rule-rule_id
+                    severity = is_rule-severity
+                    field    = to_upper( CONV string( is_rule-field ) )
+                    operator = to_upper( CONV string( is_rule-operator ) )
+                    other    = to_upper( CONV string( is_rule-other ) ) )
+           TO mt_compare_rules.
+  ENDMETHOD.
+
+
+  METHOD add_compare_rules.
+    LOOP AT it_rules INTO DATA(ls_rule).
+      add_compare_rule( ls_rule ).
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD clear_compare_rules.
+    CLEAR mt_compare_rules.
+  ENDMETHOD.
+
+
+  METHOD add_unique_rule.
+    DATA lt_fields TYPE ty_fieldnames.
+    LOOP AT is_rule-fields INTO DATA(lv_field).
+      INSERT to_upper( lv_field ) INTO TABLE lt_fields.
+    ENDLOOP.
+
+    APPEND VALUE #( rule_id  = is_rule-rule_id
+                    severity = is_rule-severity
+                    field    = to_upper( CONV string( is_rule-field ) )
+                    fields   = lt_fields )
+           TO mt_unique_rules.
+  ENDMETHOD.
+
+
+  METHOD add_unique_rules.
+    LOOP AT it_rules INTO DATA(ls_rule).
+      add_unique_rule( ls_rule ).
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD clear_unique_rules.
+    CLEAR mt_unique_rules.
   ENDMETHOD.
 
 
@@ -1024,6 +1287,233 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                    ls_finding-rule_id, ls_finding-message.
         ENDLOOP.
     ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD log_findings.
+    CHECK it_findings IS NOT INITIAL.
+
+    DATA ls_log TYPE bal_s_log.
+    ls_log-object    = iv_object.
+    ls_log-subobject = iv_subobject.
+    ls_log-extnumber = iv_extnumber.
+
+    CALL FUNCTION 'BAL_LOG_CREATE'
+      EXPORTING
+        i_s_log      = ls_log
+      IMPORTING
+        e_log_handle = rv_log_handle
+      EXCEPTIONS
+        OTHERS       = 1.
+    IF sy-subrc <> 0.
+      " e.g. object not registered in SLG0 -> nothing we can do here
+      CLEAR rv_log_handle.
+      RETURN.
+    ENDIF.
+
+    LOOP AT build_bal_msgs( it_findings ) INTO DATA(ls_msg).
+      CALL FUNCTION 'BAL_LOG_MSG_ADD'
+        EXPORTING
+          i_log_handle = rv_log_handle
+          i_s_msg      = ls_msg
+        EXCEPTIONS
+          log_not_found = 1
+          OTHERS        = 2.
+      IF sy-subrc <> 0.
+        CLEAR rv_log_handle.
+        RETURN.
+      ENDIF.
+    ENDLOOP.
+
+    DATA lt_handles TYPE bal_t_logh.
+    APPEND rv_log_handle TO lt_handles.
+
+    " save in the current LUW: the caller stays in charge of the commit
+    CALL FUNCTION 'BAL_DB_SAVE'
+      EXPORTING
+        i_t_log_handle = lt_handles
+      EXCEPTIONS
+        log_not_found    = 1
+        save_not_allowed = 2
+        numbering_error  = 3
+        OTHERS           = 4.
+    IF sy-subrc <> 0.
+      CLEAR rv_log_handle.
+      RETURN.
+    ENDIF.
+
+    IF iv_commit = abap_true.
+      COMMIT WORK.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD precheck_truncation.
+    DATA(lv_typename) = to_upper( CONV string( iv_typename ) ).
+
+    " a pre-warning is the default of this helper, E only on request
+    DATA(lv_severity) = COND ty_severity( WHEN iv_severity IS INITIAL
+                                          THEN c_severity-warning
+                                          ELSE normalize_severity( iv_severity ) ).
+
+    " existence pre-check on dd02l: describe_by_name dumps (uncatchably)
+    " for unknown names on some releases, a SELECT cannot raise
+    SELECT SINGLE @abap_true FROM dd02l
+           WHERE tabname = @lv_typename AND as4local = 'A'
+           INTO @DATA(lv_exists).
+
+    DATA: lt_dfies   TYPE ddfields,
+          lv_badtype TYPE abap_bool VALUE abap_false.
+
+    IF lv_exists = abap_true.
+      TRY.
+          DATA(lo_descr) = cl_abap_typedescr=>describe_by_name( lv_typename ).
+          IF lo_descr->kind = cl_abap_typedescr=>kind_table.
+            lo_descr = CAST cl_abap_tabledescr( lo_descr )->get_table_line_type( ).
+          ENDIF.
+          IF lo_descr->kind = cl_abap_typedescr=>kind_struct.
+            lt_dfies = CAST cl_abap_structdescr( lo_descr )->get_ddic_field_list( ).
+          ELSE.
+            lv_badtype = abap_true.
+          ENDIF.
+        CATCH cx_root ##NO_TEXT.
+          CLEAR lt_dfies.
+      ENDTRY.
+    ELSE.
+      lv_badtype = abap_true.
+    ENDIF.
+
+    IF lv_badtype = abap_true OR lt_dfies IS INITIAL.
+      APPEND VALUE #( row = 0 fieldname = '-'
+                      check_type = c_check-structure
+                      message = build_msg( iv_nr = '012' iv_a = lv_typename )
+                      severity = c_severity-error )
+             TO rt_findings.
+      RETURN.
+    ENDIF.
+
+    DATA(lo_table) = CAST cl_abap_tabledescr(
+                       cl_abap_typedescr=>describe_by_data( it_data ) ).
+    DATA(lo_line)  = lo_table->get_table_line_type( ).
+
+    IF lo_line->kind <> cl_abap_typedescr=>kind_struct.
+      APPEND VALUE #( row = 0 fieldname = '-'
+                      check_type = c_check-structure
+                      message = build_msg( iv_nr = '001' )
+                      severity = c_severity-error )
+             TO rt_findings.
+      RETURN.
+    ENDIF.
+
+    DATA(lo_struct) = CAST cl_abap_structdescr( lo_line ).
+
+    " raw columns of the staging structure have no meaningful text
+    " length -> skip them by name
+    DATA lt_skip TYPE ty_fieldnames.
+    LOOP AT lo_struct->get_components( ) ASSIGNING FIELD-SYMBOL(<ls_comp>).
+      IF <ls_comp>-type->kind <> cl_abap_typedescr=>kind_elem.
+        CONTINUE.
+      ENDIF.
+      DATA(lv_kind) = CAST cl_abap_elemdescr( <ls_comp>-type )->type_kind.
+      IF lv_kind = cl_abap_typedescr=>typekind_xstring OR
+         lv_kind = cl_abap_typedescr=>typekind_hex.
+        INSERT to_upper( <ls_comp>-name ) INTO TABLE lt_skip.
+      ENDIF.
+    ENDLOOP.
+
+    DATA lv_row TYPE i.
+    LOOP AT it_data ASSIGNING FIELD-SYMBOL(<ls_row>).
+      lv_row = lv_row + 1.
+
+      LOOP AT lt_dfies ASSIGNING FIELD-SYMBOL(<ls_dtarget>).
+
+        " only character-like target columns truncate text silently;
+        " amounts and quantities refuse the assignment or convert
+        CHECK <ls_dtarget>-datatype = c_charlike-char
+           OR <ls_dtarget>-datatype = c_charlike-numc
+           OR <ls_dtarget>-datatype = c_charlike-dats
+           OR <ls_dtarget>-datatype = c_charlike-tims
+           OR <ls_dtarget>-datatype = c_charlike-accp
+           OR <ls_dtarget>-datatype = c_charlike-lang
+           OR <ls_dtarget>-datatype = c_charlike-unit
+           OR <ls_dtarget>-datatype = c_charlike-cuky
+           OR <ls_dtarget>-datatype = c_charlike-clnt.
+
+        READ TABLE lt_skip TRANSPORTING NO FIELDS
+             WITH TABLE KEY table_line = <ls_dtarget>-fieldname.
+        IF sy-subrc = 0.
+          CONTINUE.
+        ENDIF.
+
+        " only columns that exist under the same name on both sides
+        ASSIGN COMPONENT <ls_dtarget>-fieldname OF STRUCTURE <ls_row>
+               TO FIELD-SYMBOL(<lv_src>).
+        IF sy-subrc <> 0.
+          CONTINUE.
+        ENDIF.
+
+        DATA(lv_text) = CONV string( <lv_src> ).
+        CHECK lv_text IS NOT INITIAL.
+
+        " string conversion strips trailing blanks of CHAR columns, so
+        " this is the length the assignment would really have to fit
+        IF strlen( lv_text ) > <ls_dtarget>-leng.
+          APPEND VALUE #( row = lv_row fieldname = <ls_dtarget>-fieldname
+                          value = lv_text
+                          object = |{ lv_typename }/{ <ls_dtarget>-fieldname }|
+                          check_type = c_check-truncation
+                          message = build_msg(
+                              iv_nr = '019'
+                              iv_a  = <ls_dtarget>-fieldname
+                              iv_b  = |{ strlen( lv_text ) }|
+                              iv_c  = |{ <ls_dtarget>-leng ALPHA = OUT }| )
+                          severity = lv_severity )
+                 TO rt_findings.
+        ENDIF.
+      ENDLOOP.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD build_bal_msgs.
+
+    " one placeholder = 50 characters of SE91 message text: the whole
+    " finding text is split into four of them via generic message 018
+    CONSTANTS lc_chunk TYPE i VALUE 50.
+
+    LOOP AT it_findings INTO DATA(ls_finding).
+
+      DATA ls_msg TYPE bal_s_msg.
+      CLEAR ls_msg.
+      ls_msg-msgty = normalize_severity( ls_finding-severity ).
+      ls_msg-msgid = c_msgid.
+      ls_msg-msgno = '018'.
+
+      DATA(lv_len) = strlen( ls_finding-message ).
+
+      DO 4 TIMES.
+        DATA(lv_off) = ( sy-index - 1 ) * lc_chunk.
+        IF lv_off >= lv_len.
+          EXIT.
+        ENDIF.
+        DATA(lv_chunk) = substring( val = ls_finding-message
+                                    off  = lv_off
+                                    len  = nmin( val1 = lc_chunk
+                                                 val2 = lv_len - lv_off ) ).
+        CASE sy-index.
+          WHEN 1.
+            ls_msg-msgv1 = lv_chunk.
+          WHEN 2.
+            ls_msg-msgv2 = lv_chunk.
+          WHEN 3.
+            ls_msg-msgv3 = lv_chunk.
+          WHEN 4.
+            ls_msg-msgv4 = lv_chunk.
+        ENDCASE.
+      ENDDO.
+
+      APPEND ls_msg TO rt_msgs.
+    ENDLOOP.
   ENDMETHOD.
 
 
@@ -1878,6 +2368,179 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
     INSERT VALUE #( name = iv_convexit exists = rv_ok )
            INTO TABLE mt_convexits.
+  ENDMETHOD.
+
+
+  METHOD compare_findings.
+    LOOP AT mt_compare_rules ASSIGNING FIELD-SYMBOL(<fs_cr>).
+
+      ASSIGN COMPONENT <fs_cr>-field OF STRUCTURE iv_struct
+             TO FIELD-SYMBOL(<lv_left>).
+      IF sy-subrc <> 0.
+        CONTINUE.
+      ENDIF.
+
+      ASSIGN COMPONENT <fs_cr>-other OF STRUCTURE iv_struct
+             TO FIELD-SYMBOL(<lv_right>).
+      IF sy-subrc <> 0.
+        CONTINUE.
+      ENDIF.
+
+      " initial operands are exempt: mark the fields required instead
+      " when an empty side must be reported
+      IF <lv_left> IS INITIAL OR <lv_right> IS INITIAL.
+        CONTINUE.
+      ENDIF.
+
+      DATA(lv_expr) = |{ <fs_cr>-field } { <fs_cr>-operator } { <fs_cr>-other }|.
+
+      DATA lv_ok TYPE abap_bool.
+      lv_ok = abap_false.
+      TRY.
+          CASE <fs_cr>-operator.
+            WHEN 'EQ'.
+              IF <lv_left> = <lv_right>.
+                lv_ok = abap_true.
+              ENDIF.
+            WHEN 'NE'.
+              IF <lv_left> <> <lv_right>.
+                lv_ok = abap_true.
+              ENDIF.
+            WHEN 'LT'.
+              IF <lv_left> < <lv_right>.
+                lv_ok = abap_true.
+              ENDIF.
+            WHEN 'LE'.
+              IF <lv_left> <= <lv_right>.
+                lv_ok = abap_true.
+              ENDIF.
+            WHEN 'GT'.
+              IF <lv_left> > <lv_right>.
+                lv_ok = abap_true.
+              ENDIF.
+            WHEN 'GE'.
+              IF <lv_left> >= <lv_right>.
+                lv_ok = abap_true.
+              ENDIF.
+            WHEN OTHERS.
+              CONTINUE.                " reported as structure finding before
+          ENDCASE.
+        CATCH cx_root ##NO_TEXT.
+          " operands that cannot be compared at all count as violated
+          lv_ok = abap_false.
+      ENDTRY.
+
+      IF lv_ok = abap_false.
+        APPEND VALUE #( row = iv_row fieldname = <fs_cr>-field
+                        value = CONV string( <lv_left> )
+                        object = lv_expr
+                        check_type = c_check-compare
+                        message = build_msg( iv_nr = '016'
+                                             iv_a  = CONV string( <lv_left> )
+                                             iv_b  = lv_expr )
+                        severity = normalize_severity( <fs_cr>-severity )
+                        rule_id  = <fs_cr>-rule_id )
+               TO rt_findings.
+      ENDIF.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD unique_findings.
+
+    DATA: lt_seen  TYPE ty_dup_seens,
+          lv_row   TYPE i,
+          lv_key   TYPE string,
+          lv_disp  TYPE string,
+          lv_txt   TYPE string,
+          lv_object TYPE string,
+          lv_all_init TYPE abap_bool,
+          lv_skip     TYPE abap_bool.
+
+    LOOP AT mt_unique_rules ASSIGNING FIELD-SYMBOL(<fs_ur>).
+
+      DATA(lt_fields) = unique_fields( <fs_ur> ).
+      CHECK lt_fields IS NOT INITIAL.
+
+      CLEAR lt_seen.
+
+      " fields come back sorted and deduplicated: a stable key and a
+      " stable finding object, whatever order they were registered in
+      CLEAR lv_object.
+      LOOP AT lt_fields INTO DATA(lv_uf0).
+        IF lv_object IS NOT INITIAL.
+          lv_object = lv_object && '+'.
+        ENDIF.
+        lv_object = lv_object && lv_uf0.
+      ENDLOOP.
+
+      " finding anchor: the declared field if present, else the first
+      " field of the sorted combination
+      DATA(lv_anchor) = COND fieldname( WHEN <fs_ur>-field IS NOT INITIAL
+                                        THEN <fs_ur>-field
+                                        ELSE CONV fieldname( lt_fields[ 1 ] ) ).
+
+      LOOP AT it_data ASSIGNING FIELD-SYMBOL(<ls_urow>).
+        lv_row = sy-tabix.
+
+        CLEAR: lv_key, lv_disp.
+        lv_all_init = abap_true.
+        lv_skip     = abap_false.
+
+        LOOP AT lt_fields INTO DATA(lv_uf).
+          ASSIGN COMPONENT lv_uf OF STRUCTURE <ls_urow> TO FIELD-SYMBOL(<lv_uv>).
+          IF sy-subrc <> 0.
+            lv_skip = abap_true.
+            EXIT.
+          ENDIF.
+          IF <lv_uv> IS NOT INITIAL.
+            lv_all_init = abap_false.
+          ENDIF.
+          lv_txt = CONV string( <lv_uv> ).
+          lv_key = lv_key && cl_abap_char_utilities=>horizontal_tab && lv_txt.
+          IF lv_disp IS NOT INITIAL.
+            lv_disp = lv_disp && '/'.
+          ENDIF.
+          lv_disp = lv_disp && lv_txt.
+        ENDLOOP.
+
+        CHECK lv_skip = abap_false.
+
+        " rows whose rule fields are all initial are exempt, in line
+        " with "initial values pass" everywhere else
+        CHECK lv_all_init = abap_false.
+
+        READ TABLE lt_seen INTO DATA(ls_seen) WITH TABLE KEY key = lv_key.
+        IF sy-subrc = 0.
+          APPEND VALUE #( row = lv_row
+                          fieldname = lv_anchor
+                          value = lv_disp object = lv_object
+                          check_type = c_check-unique
+                          message = build_msg( iv_nr = '017'
+                                               iv_a  = lv_disp
+                                               iv_b  = lv_object
+                                               iv_c  = CONV string( ls_seen-first_row ) )
+                          severity = normalize_severity( <fs_ur>-severity )
+                          rule_id  = <fs_ur>-rule_id )
+                 TO rt_findings.
+        ELSE.
+          INSERT VALUE #( key = lv_key first_row = lv_row ) INTO TABLE lt_seen.
+        ENDIF.
+      ENDLOOP.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD unique_fields.
+    IF is_rule-fields IS NOT INITIAL.
+      LOOP AT is_rule-fields INTO DATA(lv_field).
+        APPEND to_upper( lv_field ) TO rt_fields.
+      ENDLOOP.
+    ELSEIF is_rule-field IS NOT INITIAL.
+      APPEND to_upper( CONV string( is_rule-field ) ) TO rt_fields.
+    ENDIF.
+    SORT rt_fields ASCENDING.
+    DELETE ADJACENT DUPLICATES FROM rt_fields.
   ENDMETHOD.
 
 
