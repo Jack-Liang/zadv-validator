@@ -1470,18 +1470,26 @@ CLASS ltcl_db_rules IMPLEMENTATION.
         fieldname = 'DATE_FROM' operator = 'LE' other_field = 'DATE_TO' ) ).
 
     TRY.
-        DELETE zadv_rules WHERE scenario = lc_scenario.
+        " DELETE FROM dbtab: without FROM the parser reads the internal
+        " table variant and fails on WHERE
+        DELETE FROM zadv_rules WHERE scenario = lc_scenario.
         INSERT zadv_rules FROM TABLE lt_seed.
       CATCH cx_root INTO DATA(lx_dml) ##NO_TEXT.
         ROLLBACK WORK.
-        cl_abap_unit_assert=>assert_fail(
+        " assert_fail does not exist on 7.40 SP08 - an always false
+        " assert_equals carries the diagnostic message instead
+        cl_abap_unit_assert=>assert_equals(
+            exp = abap_true
+            act = abap_false
             msg = |DML on ZADV_RULES raised: { lx_dml->get_text( ) }| ).
         RETURN.
     ENDTRY.
 
     IF sy-subrc <> 0.
       ROLLBACK WORK.
-      cl_abap_unit_assert=>assert_fail(
+      cl_abap_unit_assert=>assert_equals(
+          exp = abap_true
+          act = abap_false
           msg = |INSERT into ZADV_RULES returned sy-subrc { sy-subrc }| ).
       RETURN.
     ENDIF.

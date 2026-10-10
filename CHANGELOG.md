@@ -14,7 +14,10 @@
   （按位匹配/客户端列处理）两轮真机未过，弃用——改静态类型化 DML
   （`TYPE zadv_rules` 内表按组件名填充，客户端自动），代价是测试类对
   表对象的激活依赖（abapGit 先激活 DDIC，主类仍走动态 SELECT 保持
-  独立）；DML 包 TRY，异常转带消息的 assert_fail 而非裸错误。
+  独立）；DML 包 TRY，异常转带消息的断言失败而非裸错误。d) SP08 语法
+  两处：静态删表须 `DELETE FROM dbtab WHERE`（无 FROM 被按内表变体
+  解析报语法错）；`cl_abap_unit_assert=>assert_fail` 该版本不存在，
+  以恒假 assert_equals 携带诊断消息。
   顺带更正历史计数：v1.1.0 实为 48 例（误记 47），v2.0.0 实为 51 例
   （误记 50），累计笔误 +1，下文两处已订正
 - 重构（纯内部，公共 API 与行为不变，50 个单测不改自应通过）：
