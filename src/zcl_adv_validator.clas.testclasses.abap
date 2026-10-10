@@ -22,7 +22,10 @@ CLASS ltcl_validate DEFINITION FINAL
       regex_rule           FOR TESTING,
       regex_rule_ok        FOR TESTING,
       required_rule        FOR TESTING,
-      rule_field_missing   FOR TESTING.
+      rule_field_missing   FOR TESTING,
+      only_fields_restricts FOR TESTING,
+      exclude_fields_skips FOR TESTING,
+      only_field_unknown   FOR TESTING.
 ENDCLASS.
 
 
@@ -146,6 +149,56 @@ CLASS ltcl_validate IMPLEMENTATION.
 
     cl_abap_unit_assert=>assert_equals(
         exp = 1 act = lines( lt_findings ) msg = 'unstructured table not rejected' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-structure )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+  ENDMETHOD.
+
+
+  METHOD only_fields_restricts.
+    DATA(lv_invalid) = `20261301`.
+
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->only_fields( VALUE #( ( 'DATE' ) ) ).
+
+    DATA(lt_findings) = lo_validator->validate(
+        VALUE ty_rows( ( status = 'Z' date = lv_invalid mail = 'x' ) ) ).
+
+    " status 'Z' is invalid as well but the column filter must skip it
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings ) msg = 'only_fields not applied' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-date )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+  ENDMETHOD.
+
+
+  METHOD exclude_fields_skips.
+    DATA(lv_invalid) = `20261301`.
+
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->exclude_fields( VALUE #( ( 'DATE' ) ) ).
+
+    DATA(lt_findings) = lo_validator->validate(
+        VALUE ty_rows( ( status = 'Z' date = lv_invalid mail = 'x' ) ) ).
+
+    " the invalid date must be skipped, only the domain finding remains
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings ) msg = 'exclude_fields not applied' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-domain )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+  ENDMETHOD.
+
+
+  METHOD only_field_unknown.
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->only_fields( VALUE #( ( 'DOES_NOT_EXIST' ) ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows( ( ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings ) msg = 'unknown only field not reported' ).
     cl_abap_unit_assert=>assert_equals(
         exp = CONV string( zcl_adv_validator=>c_check-structure )
         act = CONV string( lt_findings[ 1 ]-check_type ) ).

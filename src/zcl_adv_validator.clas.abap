@@ -25,7 +25,10 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         domname    TYPE c LENGTH 30,
         regex      TYPE string,
       END OF ty_rule,
-      ty_rules TYPE STANDARD TABLE OF ty_rule WITH EMPTY KEY.
+      ty_rules TYPE STANDARD TABLE OF ty_rule WITH EMPTY KEY,
+
+      "! column filter lists for only_fields( ) / exclude_fields( )
+      ty_fieldnames TYPE HASHED TABLE OF fieldname WITH UNIQUE KEY table_line.
 
     CONSTANTS:
       "! Categories reported in ty_finding-check_type
@@ -60,10 +63,23 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
 
       clear_rules,
 
+      "! Restrict validation to the given columns (initial = all columns).
+      "! Rules on other columns are skipped as well. Unknown names are
+      "! reported as STRUCTURE findings. Replaces the previous list,
+      "! an empty list resets the restriction.
+      only_fields
+        IMPORTING it_fields TYPE ty_fieldnames,
+
+      "! Remove the given columns from validation, applied within an
+      "! only_fields restriction if both are set. Replaces the previous
+      "! list, an empty list resets.
+      exclude_fields
+        IMPORTING it_fields TYPE ty_fieldnames,
+
       "! Discard cached domain fixed values, check-table lookups and
-      "! conversion-exit existence checks. Call this when DDIC objects
-      "! or customizing data may have changed during the lifetime of
-      "! the validator instance.
+      "! conversion-exit existence checks. Call this when DDIC objects or
+      "! customizing data may have changed during the lifetime of the
+      "! validator instance.
       clear_caches.
 
   PRIVATE SECTION.
@@ -116,10 +132,12 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       ty_convexits TYPE HASHED TABLE OF ty_convexit WITH UNIQUE KEY name.
 
     DATA:
-      mt_rules     TYPE ty_rules,
-      mt_domains   TYPE ty_domains,
-      mt_ctab_hits TYPE ty_ctab_hits,
-      mt_convexits TYPE ty_convexits.
+      mt_rules          TYPE ty_rules,
+      mt_only_fields    TYPE ty_fieldnames,
+      mt_exclude_fields TYPE ty_fieldnames,
+      mt_domains        TYPE ty_domains,
+      mt_ctab_hits      TYPE ty_ctab_hits,
+      mt_convexits      TYPE ty_convexits.
 
     METHODS:
       build_fields
@@ -194,7 +212,38 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     DATA(lt_fields) = build_fields( lo_struct ).
 
     " ---------------------------------------------------------------------
-    " 2) rules referencing fields that do not exist -> structural findings
+    " 2) column filter: only_fields whitelist first, then exclude_fields
+    " ---------------------------------------------------------------------
+    IF mt_only_fields IS NOT INITIAL.
+      DATA lt_filtered TYPE ty_fields.
+      LOOP AT lt_fields ASSIGNING FIELD-SYMBOL(<fs_filter>).
+        READ TABLE mt_only_fields TRANSPORTING NO FIELDS
+             WITH TABLE KEY table_line = <fs_filter>-fieldname.
+        IF sy-subrc = 0.
+          INSERT <fs_filter> INTO TABLE lt_filtered.
+        ENDIF.
+      ENDLOOP.
+      LOOP AT mt_only_fields INTO DATA(lv_only).
+        READ TABLE lt_filtered TRANSPORTING NO FIELDS
+             WITH TABLE KEY fieldname = lv_only.
+        IF sy-subrc <> 0.
+          APPEND VALUE #( row = 0 fieldname = lv_only
+                          check_type = c_check-structure
+                          message   = |Only field { lv_only } does not exist in the structure| )
+                 TO rt_findings.
+        ENDIF.
+      ENDLOOP.
+      lt_fields = lt_filtered.
+    ENDIF.
+
+    IF mt_exclude_fields IS NOT INITIAL.
+      LOOP AT mt_exclude_fields INTO DATA(lv_exclude).
+        DELETE lt_fields WHERE fieldname = lv_exclude.
+      ENDLOOP.
+    ENDIF.
+
+    " ---------------------------------------------------------------------
+    " 3) rules referencing fields that do not exist -> structural findings
     " ---------------------------------------------------------------------
     CREATE DATA lr_line TYPE HANDLE lo_struct.
     ASSIGN lr_line->* TO <row>.
@@ -210,7 +259,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     ENDLOOP.
 
     " ---------------------------------------------------------------------
-    " 3) row loop
+    " 4) row loop
     " ---------------------------------------------------------------------
     LOOP AT it_data ASSIGNING <row>.
       lv_row = lv_row + 1.
@@ -360,6 +409,22 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
   METHOD clear_rules.
     CLEAR mt_rules.
+  ENDMETHOD.
+
+
+  METHOD only_fields.
+    CLEAR mt_only_fields.
+    LOOP AT it_fields INTO DATA(lv_field).
+      INSERT CONV fieldname( to_upper( lv_field ) ) INTO TABLE mt_only_fields.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD exclude_fields.
+    CLEAR mt_exclude_fields.
+    LOOP AT it_fields INTO DATA(lv_field).
+      INSERT CONV fieldname( to_upper( lv_field ) ) INTO TABLE mt_exclude_fields.
+    ENDLOOP.
   ENDMETHOD.
 
 

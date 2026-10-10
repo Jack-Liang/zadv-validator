@@ -62,6 +62,20 @@ ENDIF.
 上出现，否则按宽容模式放行（不报错、不崩溃）。确定性的校验（域固定值
 AS4LOCAL、日期格式、正则、必填）在任何系统上都能看到效果。
 
+## 列过滤
+
+默认校验 DDIC 能推导出的全部列。可以限定范围：
+
+```abap
+" 只检查指定列（规则也只对这些列生效；写错字段名会在 findings 里报 STRUCTURE）
+lo_validator->only_fields( VALUE #( ( 'BUKRS' ) ( 'WAERS' ) ) ).
+
+" 或排除指定列（与 only_fields 同时设置时，在其范围内排除）
+lo_validator->exclude_fields( VALUE #( ( 'REMARK' ) ) ).
+
+" 两个方法均整体替换各自列表；传空表 VALUE #( ) 重置
+```
+
 ## 返回结构 ty_finding
 
 | 字段 | 含义 |
@@ -115,7 +129,7 @@ AS4LOCAL、日期格式、正则、必填）在任何系统上都能看到效果
 src/
   package.devc.xml                        包 ZADV_VALIDATOR
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，无接口依赖）
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（9 个用例）
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（12 个用例）
   zadv_demo.prog.abap                     演示报表
 ```
 
@@ -123,7 +137,8 @@ src/
 
 类 `ZCL_ADV_VALIDATOR` 自带 ABAP Unit（SE80 → 类 → 运行，或 ADT），
 覆盖：合法行零误报、非法日期/时间/域值、正则与必填规则、规则字段缺失、
-非结构化表拒绝。检查表类用例依赖系统主数据，故在 demo 中演示而非单测。
+非结构化表拒绝、列过滤（only/exclude 及白名单字段名纠错）。检查表类用例
+依赖系统主数据，故在 demo 中演示而非单测。
 
 ## License
 

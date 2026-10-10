@@ -50,6 +50,10 @@ START-OF-SELECTION.
     ( fieldname = 'EMAIL'  regex = `^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$` )
     ( fieldname = 'REMARK' required = abap_true ) ) ).
 
+  " restrict validation to specific columns (optional, example):
+  " lo_validator->only_fields( VALUE #( ( 'BUKRS' ) ( 'WAERS' ) ) ).
+  " lo_validator->exclude_fields( VALUE #( ( 'STATUS' ) ) ).
+
   " example of an explicit check-table rule overriding DDIC:
   " ( fieldname = 'BUKRS' checktable = 'T001' checkfield = 'BUKRS' )
 
