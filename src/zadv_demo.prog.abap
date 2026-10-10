@@ -11,7 +11,7 @@ REPORT zadv_demo.
 "* value pass instead of raising an error.
 
 TYPES: BEGIN OF ty_upload,
-         xflag  TYPE xfeld,     " domain XFELD: fixed values X / space
+         status TYPE as4local,  " domain AS4LOCAL: fixed values A/N/I
          budat  TYPE budat,     " DATS format check
          bukrs  TYPE bukrs,     " check table T001
          land1  TYPE land1,     " check table T005
@@ -31,16 +31,16 @@ START-OF-SELECTION.
 
   gt_upload = VALUE #(
     " row 1: values that are valid on most systems
-    ( xflag = 'X' budat = sy-datum bukrs = '1000' land1 = 'DE'
+    ( status = 'A' budat = sy-datum bukrs = '1000' land1 = 'DE'
       waers = 'EUR' email = 'dev@example.com' remark = 'typical valid row' )
 
     " row 2: wrong domain value, wrong date, unknown check-table values,
     "        failing regex, missing required remark
-    ( xflag = 'N' budat = lv_invalid_date bukrs = 'ZZZZ' land1 = 'ZZ'
+    ( status = 'Z' budat = lv_invalid_date bukrs = 'ZZZZ' land1 = 'ZZ'
       waers = 'ZZZ' email = 'not-an-email' remark = '' )
 
     " row 3: everything fine except the domain value
-    ( xflag = 'Y' budat = sy-datum bukrs = '1000' land1 = 'DE'
+    ( status = 'Z' budat = sy-datum bukrs = '1000' land1 = 'DE'
       waers = 'EUR' email = 'fine@example.com' remark = 'only flag wrong' ) ).
 
   DATA(lo_validator) = NEW zcl_adv_validator( ).

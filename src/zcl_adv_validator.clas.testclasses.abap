@@ -6,10 +6,10 @@ CLASS ltcl_validate DEFINITION FINAL
 
   PRIVATE SECTION.
     TYPES: BEGIN OF ty_row,
-             flag TYPE xfeld,     " domain XFELD with fixed values
-             date TYPE budat,     " DATS
-             time TYPE uzeit,     " TIMS
-             mail TYPE string,    " non DDIC -> only usable via rules
+             status TYPE as4local,  " domain AS4LOCAL: fixed values A/N/I
+             date   TYPE budat,     " DATS
+             time   TYPE uzeit,     " TIMS
+             mail   TYPE string,    " non DDIC -> only usable via rules
            END OF ty_row,
            ty_rows TYPE STANDARD TABLE OF ty_row WITH EMPTY KEY.
 
@@ -30,7 +30,7 @@ CLASS ltcl_validate IMPLEMENTATION.
 
   METHOD clean_row_no_findings.
     DATA(lt_rows) = VALUE ty_rows(
-      ( flag = 'X' date = '20261010' time = '235959' mail = 'a@b.de' ) ).
+      ( status = 'A' date = '20261010' time = '235959' mail = 'a@b.de' ) ).
 
     DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
 
@@ -74,8 +74,8 @@ CLASS ltcl_validate IMPLEMENTATION.
 
 
   METHOD invalid_domain_value.
-    " 'Y' is outside the fixed values of domain XFELD (X / space)
-    DATA(lt_rows) = VALUE ty_rows( ( flag = 'Y' ) ).
+    " 'Z' is outside the fixed values of domain AS4LOCAL (A/N/I)
+    DATA(lt_rows) = VALUE ty_rows( ( status = 'Z' ) ).
 
     DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
 

@@ -395,7 +395,11 @@ CLASS zcl_adv_validator IMPLEMENTATION.
           CONTINUE.
         ENDIF.
         TRY.
-            APPEND lo_elem->get_ddic_field( ) TO lt_dfies.
+            DATA(ls_dfies) = lo_elem->get_ddic_field( ).
+            " a standalone element description has no structure context,
+            " its dfies-fieldname is initial -> use the component name
+            ls_dfies-fieldname = <ls_comp>-name.
+            APPEND ls_dfies TO lt_dfies.
           CATCH cx_root ##NO_TEXT.
             CONTINUE.
         ENDTRY.
