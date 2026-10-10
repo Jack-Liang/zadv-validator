@@ -2,6 +2,13 @@
 
 ## 未发布
 
+- CURR/QUAN 参照校验（v1.0）：金额字段（DFIES-DATATYPE = CURR/QUAN）经
+  REFFIELD 找到同结构的货币/单位代码列，代码列无自有外键/规则时自动补
+  TCURC/WAERS、T006/MSEHI 检查表（在 resolve_foreign_keys 之后执行，真
+  外键与规则永远优先，同一问题不重复报错）；完全复用检查表机制——批量
+  预取、缓存、宽容回退、CUNIT 转换出口全部继承，无新消息号
+- 单测 25 → 27：MARA GEWEI→T006/MSEHI（含 CUNIT）、VBAK WAERS→TCURC/WAERS，
+  有效值通过 + 未知代码拦截 + finding 对象断言
 - 完整外键映射（v1.0）：DDIC 检查表字段的真实映射改读 DD05S——非同名检查
   字段自动生效（如 KNA1-REGIO → T005A-BLAND），组合外键（LAND1+REGIO →
   T005A 的 LAND1+BLAND）按字段组合校验；映射按结构名缓存（一次 SELECT）

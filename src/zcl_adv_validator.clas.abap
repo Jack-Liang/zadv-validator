@@ -157,6 +157,7 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         rule_domname TYPE dfies-domname,
         fkey_checkfield TYPE fieldname,
         fkey_partners   TYPE ty_fk_partners,
+        reffield     TYPE dfies-reffield,
       END OF ty_field,
       ty_fields TYPE SORTED TABLE OF ty_field WITH UNIQUE KEY fieldname,
 
@@ -267,6 +268,15 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       get_struct_fks
         IMPORTING iv_tabname   TYPE tabname
         RETURNING VALUE(rs_fk) TYPE ty_struct_fk,
+
+      "! fill the check table of currency/unit code columns (e.g. WAERS,
+      "! GEWEI) that are referenced by CURR/QUAN amount fields of the
+      "! same structure but carry no own DDIC foreign key: TCURC/WAERS
+      "! resp. T006/MSEHI. Must run after resolve_foreign_keys so that
+      "! real DDIC foreign keys and explicit rules always win and the
+      "! same problem is never reported twice.
+      resolve_curr_quan
+        CHANGING ct_fields TYPE ty_fields,
 
       "! ordered check table field list of a composite foreign key:
       "! own check field first, then the partners (sorted by field name)
@@ -457,6 +467,11 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     resolve_foreign_keys(
       EXPORTING iv_structname = CONV #( lo_struct->get_relative_name( ) )
       CHANGING  ct_fields     = lt_fields ).
+
+    " ---------------------------------------------------------------------
+    " 3.6) currency/unit code columns referenced by CURR/QUAN amounts
+    " ---------------------------------------------------------------------
+    resolve_curr_quan( CHANGING ct_fields = lt_fields ).
 
     " ---------------------------------------------------------------------
     " 3) rules referencing fields that do not exist -> structural findings
@@ -876,7 +891,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                       domname    = <ls_dfies>-domname
                       datatype   = <ls_dfies>-datatype
                       convexit   = <ls_dfies>-convexit
-                      checktable = <ls_dfies>-checktable )
+                      checktable = <ls_dfies>-checktable
+                      reffield   = <ls_dfies>-reffield )
              INTO TABLE rt_fields.
     ENDLOOP.
 
@@ -984,6 +1000,39 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       INTO CORRESPONDING FIELDS OF TABLE @rs_fk-maps.
 
     INSERT rs_fk INTO TABLE mt_struct_fks.
+  ENDMETHOD.
+
+
+  METHOD resolve_curr_quan.
+    LOOP AT ct_fields ASSIGNING FIELD-SYMBOL(<fs_amt>)
+         WHERE datatype = 'CURR' OR datatype = 'QUAN'.
+
+      " CURR/QUAN amounts know their currency/unit code column by name
+      CHECK <fs_amt>-reffield IS NOT INITIAL.
+      CHECK <fs_amt>-reffield <> <fs_amt>-fieldname.
+
+      READ TABLE ct_fields ASSIGNING FIELD-SYMBOL(<fs_code>)
+           WITH TABLE KEY fieldname = <fs_amt>-reffield.
+      IF sy-subrc <> 0.
+        CONTINUE.                       " code column not part of the upload
+      ENDIF.
+
+      " an own DDIC foreign key or an explicit rule already validates
+      " the code column -> never report the same problem twice
+      CHECK <fs_code>-checktable IS INITIAL AND <fs_code>-rule_ctab IS INITIAL.
+
+      " fkey_checkfield is the generic "resolved check table field" slot
+      " read by the prefetch and the row loop alike; the code column
+      " itself carries no conversion exit for currency keys, units keep
+      " their CUNIT exit in internal_value( )
+      IF <fs_amt>-datatype = 'CURR'.
+        <fs_code>-checktable      = 'TCURC'.
+        <fs_code>-fkey_checkfield = 'WAERS'.
+      ELSE.
+        <fs_code>-checktable      = 'T006'.
+        <fs_code>-fkey_checkfield = 'MSEHI'.
+      ENDIF.
+    ENDLOOP.
   ENDMETHOD.
 
 

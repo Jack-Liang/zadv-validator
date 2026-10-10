@@ -16,6 +16,7 @@
 |---|---|---|
 | 域固定值 `DOMAIN` | 自动（DD07L/DD01L） | 支持单值与区间；尊重域的小写标志 |
 | 检查表 `CHECKTABLE` | 自动（DFIES-CHECKTABLE + DD05S 外键映射）或规则指定 | 外键字段经 DD05S 解析真实检查表字段（支持非同名，如 REGIO→T005A-BLAND）；组合外键按字段组合校验；行循环前批量预填缓存（单列每批 100 值 IN，组合键每批 100 元组 OR-of-ANDs） |
+| 货币/单位参照 | 自动（DFIES-REFFIELD） | CURR/QUAN 金额字段引用的代码列（如 WAERS/GEWEI）若在上传结构中且无自有外键/规则，自动补 TCURC/WAERS、T006/MSEHI 检查（复用检查表全套机制，含 CUNIT 转换） |
 | 日期格式 `DATE` | 自动（DATS） | YYYYMMDD，含月份天数与闰年 |
 | 时间格式 `TIME` | 自动（TIMS） | HHMMSS |
 | 数字串 `NUMC` | 自动（NUMC） | 只允许数字 |
@@ -160,7 +161,7 @@ src/
   package.devc.xml                        包 ZADV_VALIDATOR
   zadv_validator.msag.xml                 SE91 消息类 ZADV_VALIDATOR（001–015）
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，无接口依赖）
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（25 个用例）
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（27 个用例）
   zadv_demo.prog.abap                     演示报表
 ```
 
@@ -173,7 +174,9 @@ src/
 （以 DD07L/DOMNAME 为检查表，不依赖系统主数据）、缺失检查表的宽容回退、
 缓存幂等（重复 validate 与 clear_caches 后结果一致）、ALPHA 转换出口
 （VBELN）、组合外键（KNA1 LAND1+REGIO → T005A：有效组合通过、无效组合
-拦截并验证 DD05S 非同名映射 REGIO→BLAND、伙伴为空的宽容回退、缓存幂等）。
+拦截并验证 DD05S 非同名映射 REGIO→BLAND、伙伴为空的宽容回退、缓存幂等）、
+CURR/QUAN 参照（MARA GEWEI→T006/MSEHI 含 CUNIT 转换、VBAK WAERS→
+TCURC/WAERS，有效值通过 + 未知代码拦截）。
 依赖系统主数据的场景（真实检查表 T001 等）仍以 demo 演示为主；
 小写域、区间型域值因缺少跨版本稳定的样例域，暂未纳入单测。
 
@@ -192,7 +195,8 @@ src/
 - [ ] **校验插件化**：抽出单列校验器接口（域值/检查表/格式/正则各自实现类），开放注册自定义校验
 - [ ] 跨字段与行间规则：如 DATE_FROM <= DATE_TO、文件内查重（依赖插件化）
 - [ ] finding 增强：severity（E/W/I）、规则 ID；BAL 应用日志与 ALV 输出 helper
-- [ ] CURR/QUAN 参照校验：货币列参照 TCURC、单位列参照 T006（DFIES-REFTABLE/REFFIELD 自动识别）
+- [x] CURR/QUAN 参照校验：货币列参照 TCURC、单位列参照 T006（DFIES-REFTABLE/REFFIELD 自动识别）。
+  仅当代码列无自有外键/规则时补检查，绝不重复报错
 - [ ] 暂存 STRING 字段截断预检（超长值入库前预警）
 - [ ] 单测补遗：小写域、区间型域值（待选定跨版本稳定的样例域，或以 CDS/临时 DDIC 方式自建）
 - [ ] README 英文版

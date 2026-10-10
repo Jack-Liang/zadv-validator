@@ -38,7 +38,9 @@ CLASS ltcl_validate DEFINITION FINAL
       fkey_composite_valid     FOR TESTING,
       fkey_composite_invalid   FOR TESTING,
       fkey_partner_initial     FOR TESTING,
-      fkey_cache_idempotent    FOR TESTING.
+      fkey_cache_idempotent    FOR TESTING,
+      curr_quan_unit_t006      FOR TESTING,
+      curr_quan_currency_tcurc FOR TESTING.
 ENDCLASS.
 
 
@@ -467,6 +469,55 @@ CLASS ltcl_validate IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
         exp = lines( lt_first ) act = lines( lo_validator->validate( lt_rows ) )
         msg = 'validate after clear_caches must return identical findings' ).
+  ENDMETHOD.
+
+
+  METHOD curr_quan_unit_t006.
+    " MARA-NTGEW (QUAN) references the unit column MARA-GEWEI: the unit
+    " code is validated against T006/MSEHI (with the CUNIT conversion
+    " exit of GEWEI applied). An existing own foreign key on GEWEI
+    " produces the very same lookup, both paths are fine here.
+    DATA lt_rows TYPE STANDARD TABLE OF mara WITH EMPTY KEY.
+    APPEND VALUE #( ntgew = '1' gewei = 'KG' ) TO lt_rows.
+    APPEND VALUE #( ntgew = '1' gewei = 'ZZX' ) TO lt_rows.
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'unknown unit must be reported, valid unit must pass' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-checktable )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = |T006/MSEHI| act = CONV string( lt_findings[ 1 ]-object )
+        msg = 'unit code column must be checked against T006/MSEHI' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lt_findings[ 1 ]-row ).
+  ENDMETHOD.
+
+
+  METHOD curr_quan_currency_tcurc.
+    " VBAK-NETWR (CURR) references the currency column VBAK-WAERS: the
+    " currency code is validated against TCURC/WAERS. 'EUR' exists on
+    " every system, 'ZZZ9' does not exist anywhere
+    DATA lt_rows TYPE STANDARD TABLE OF vbak WITH EMPTY KEY.
+    APPEND VALUE #( netwr = '1' waers = 'EUR' ) TO lt_rows.
+    APPEND VALUE #( netwr = '1' waers = 'ZZZ9' ) TO lt_rows.
+
+    DATA(lt_findings) = NEW zcl_adv_validator( )->validate( lt_rows ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 1 act = lines( lt_findings )
+        msg = 'unknown currency must be reported, EUR must pass' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = CONV string( zcl_adv_validator=>c_check-checktable )
+        act = CONV string( lt_findings[ 1 ]-check_type ) ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = |TCURC/WAERS| act = CONV string( lt_findings[ 1 ]-object )
+        msg = 'currency code column must be checked against TCURC/WAERS' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lt_findings[ 1 ]-row ).
   ENDMETHOD.
 
 ENDCLASS.
