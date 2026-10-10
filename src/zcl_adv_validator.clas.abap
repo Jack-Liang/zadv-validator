@@ -15,8 +15,15 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       c_description FOR zif_adv_metadata~c_description.
 
     TYPES:
+      "! finding severity: E = error (default), W = warning, I = info.
+      "! Used as the type of ty_rule-severity / ty_finding-severity.
+      ty_severity TYPE c LENGTH 1,
+
       "! One error found by the validator. Row 0 is used for structural
       "! problems (bad table type, rule references unknown field, ...).
+      "! severity is never initial ('E' default); rule_id is only filled
+      "! when the finding originates from an explicit rule that carries
+      "! one - DDIC derived findings stay initial there.
       BEGIN OF ty_finding,
         row        TYPE i,
         fieldname  TYPE fieldname,
@@ -24,11 +31,14 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         check_type TYPE c LENGTH 12,
         object     TYPE c LENGTH 60,
         message    TYPE string,
+        severity   TYPE ty_severity,
+        rule_id    TYPE c LENGTH 30,
       END OF ty_finding,
       ty_findings TYPE STANDARD TABLE OF ty_finding WITH EMPTY KEY,
 
       "! Explicit rule that adds to or overrides the DDIC derived checks.
-      "! All attributes are optional.
+      "! All attributes are optional. severity defaults to 'E',
+      "! rule_id is echoed into the findings of this rule.
       BEGIN OF ty_rule,
         fieldname  TYPE fieldname,
         required   TYPE abap_bool,
@@ -36,6 +46,8 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         checkfield TYPE fieldname,
         domname    TYPE c LENGTH 30,
         regex      TYPE string,
+        severity   TYPE ty_severity,
+        rule_id    TYPE c LENGTH 30,
       END OF ty_rule,
       ty_rules TYPE STANDARD TABLE OF ty_rule WITH EMPTY KEY,
 
@@ -57,7 +69,14 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         time       TYPE c LENGTH 12 VALUE 'TIME',
         numc       TYPE c LENGTH 12 VALUE 'NUMC',
         regex      TYPE c LENGTH 12 VALUE 'REGEX',
-      END OF c_check.
+      END OF c_check,
+
+      "! severities reported in ty_finding-severity
+      BEGIN OF c_severity,
+        error   TYPE ty_severity VALUE 'E',
+        warning TYPE ty_severity VALUE 'W',
+        info    TYPE ty_severity VALUE 'I',
+      END OF c_severity.
 
     METHODS:
       "! Validate any internal table against DDIC metadata and added
@@ -118,7 +137,16 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
                   iv_tabname   TYPE clike
                   iv_fieldname TYPE clike
         EXPORTING es_finding   TYPE ty_finding
-        RETURNING VALUE(rv_ok) TYPE abap_bool.
+        RETURNING VALUE(rv_ok) TYPE abap_bool,
+
+      "! show findings in a SALV grid with optimized columns and an
+      "! optional list header; on systems without SALV the findings are
+      "! written to the classic list instead. Pure convenience - the
+      "! findings are plain data, the kind of display stays the
+      "! caller's choice.
+      display_findings
+        IMPORTING it_findings TYPE ty_findings
+                  iv_title    TYPE clike OPTIONAL.
 
   PRIVATE SECTION.
 
@@ -170,6 +198,8 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         fkey_checkfield TYPE fieldname,
         fkey_partners   TYPE ty_fk_partners,
         reffield     TYPE dfies-reffield,
+        rule_severity TYPE ty_severity,
+        rule_id       TYPE c LENGTH 30,
       END OF ty_field,
       ty_fields TYPE SORTED TABLE OF ty_field WITH UNIQUE KEY fieldname,
 
@@ -261,6 +291,12 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       mt_convexits      TYPE ty_convexits.
 
     METHODS:
+      "! normalize a rule severity: initial and invalid values become
+      "! c_severity-error, 'W' and 'I' pass through
+      normalize_severity
+        IMPORTING iv_severity        TYPE clike
+        RETURNING VALUE(rv_severity) TYPE ty_severity,
+
       build_fields
         IMPORTING io_struct        TYPE REF TO cl_abap_structdescr
         RETURNING VALUE(rt_fields) TYPE ty_fields,
@@ -437,7 +473,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     IF lo_line->kind <> cl_abap_typedescr=>kind_struct.
       APPEND VALUE #( row = 0 fieldname = '-'
                       check_type = c_check-structure
-                      message   = build_msg( iv_nr = '001' ) )
+                      message   = build_msg( iv_nr = '001' )
+                      severity  = c_severity-error )
              TO rt_findings.
       RETURN.
     ENDIF.
@@ -464,7 +501,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
           APPEND VALUE #( row = 0 fieldname = lv_only
                           check_type = c_check-structure
                           message   = build_msg( iv_nr = '002'
-                                                  iv_a  = lv_only ) )
+                                                  iv_a  = lv_only )
+                          severity  = c_severity-error )
                  TO rt_findings.
         ENDIF.
       ENDLOOP.
@@ -501,7 +539,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         APPEND VALUE #( row = 0 fieldname = <fs_chk>-fieldname
                         check_type = c_check-structure
                         message   = build_msg( iv_nr = '003'
-                                                iv_a  = <fs_chk>-fieldname ) )
+                                                iv_a  = <fs_chk>-fieldname )
+                        severity  = c_severity-error )
                TO rt_findings.
       ENDIF.
     ENDLOOP.
@@ -533,7 +572,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                           value = lv_disp
                           check_type = c_check-required
                           message = build_msg( iv_nr = '004'
-                                               iv_a  = <fs_field>-fieldname ) )
+                                               iv_a  = <fs_field>-fieldname )
+                          severity = <fs_field>-rule_severity
+                          rule_id  = <fs_field>-rule_id )
                  TO rt_findings.
           CONTINUE.
         ENDIF.
@@ -551,7 +592,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                               value = lv_disp
                               check_type = c_check-date
                               message = build_msg( iv_nr = '005'
-                                                   iv_a  = lv_disp ) )
+                                                   iv_a  = lv_disp )
+                              severity  = c_severity-error )
                      TO rt_findings.
               CONTINUE.
             ENDIF.
@@ -561,7 +603,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                               value = lv_disp
                               check_type = c_check-time
                               message = build_msg( iv_nr = '006'
-                                                   iv_a  = lv_disp ) )
+                                                   iv_a  = lv_disp )
+                              severity  = c_severity-error )
                      TO rt_findings.
               CONTINUE.
             ENDIF.
@@ -571,7 +614,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                               value = lv_disp
                               check_type = c_check-numc
                               message = build_msg( iv_nr = '007'
-                                                   iv_a  = lv_disp ) )
+                                                   iv_a  = lv_disp )
+                              severity  = c_severity-error )
                      TO rt_findings.
               CONTINUE.
             ENDIF.
@@ -599,7 +643,13 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                           check_type = c_check-domain
                           message = build_msg( iv_nr = '008'
                                                iv_a  = lv_disp
-                                               iv_b  = lv_dom ) )
+                                               iv_b  = lv_dom )
+                          severity = COND ty_severity(
+                                       WHEN <fs_field>-rule_domname IS NOT INITIAL
+                                       THEN <fs_field>-rule_severity
+                                       ELSE c_severity-error )
+                          rule_id  = COND #( WHEN <fs_field>-rule_domname IS NOT INITIAL
+                                             THEN <fs_field>-rule_id ) )
                  TO rt_findings.
           CONTINUE.
         ENDIF.
@@ -646,7 +696,8 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                               message = build_msg( iv_nr = '015'
                                                    iv_a  = lv_disp
                                                    iv_b  = lv_ctab
-                                                   iv_c  = lv_keysig ) )
+                                                   iv_c  = lv_keysig )
+                              severity  = c_severity-error )
                      TO rt_findings.
               CONTINUE.
             ENDIF.
@@ -665,7 +716,13 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                           message = build_msg( iv_nr = '009'
                                                iv_a  = lv_disp
                                                iv_b  = lv_ctab
-                                               iv_c  = lv_cfld ) )
+                                               iv_c  = lv_cfld )
+                          severity = COND ty_severity(
+                                       WHEN <fs_field>-rule_ctab IS NOT INITIAL
+                                       THEN <fs_field>-rule_severity
+                                       ELSE c_severity-error )
+                          rule_id  = COND #( WHEN <fs_field>-rule_ctab IS NOT INITIAL
+                                             THEN <fs_field>-rule_id ) )
                  TO rt_findings.
           CONTINUE.
         ENDIF.
@@ -681,7 +738,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
                             value = lv_disp object = <fs_field>-regex
                             check_type = c_check-regex
                             message = build_msg( iv_nr = '010'
-                                                 iv_a  = lv_disp ) )
+                                                 iv_a  = lv_disp )
+                            severity = <fs_field>-rule_severity
+                            rule_id  = <fs_field>-rule_id )
                    TO rt_findings.
             CONTINUE.
           ENDIF.
@@ -770,6 +829,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       es_finding-row        = 0.
       es_finding-fieldname  = CONV fieldname( lv_field ).
       es_finding-check_type = c_check-structure.
+      es_finding-severity   = c_severity-error.
       es_finding-message    = build_msg( iv_nr = '012' iv_a = lv_tabname ).
       RETURN.
     ENDIF.
@@ -785,6 +845,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       es_finding-row        = 0.
       es_finding-fieldname  = CONV fieldname( lv_field ).
       es_finding-check_type = c_check-structure.
+      es_finding-severity   = c_severity-error.
       es_finding-message    = build_msg( iv_nr = '013'
                                          iv_a  = lv_field
                                          iv_b  = lv_tabname ).
@@ -795,6 +856,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       es_finding-row        = 0.
       es_finding-fieldname  = CONV fieldname( lv_field ).
       es_finding-check_type = c_check-structure.
+      es_finding-severity   = c_severity-error.
       es_finding-message    = build_msg( iv_nr = '014'
                                          iv_a  = lv_field
                                          iv_b  = lv_tabname ).
@@ -834,6 +896,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       es_finding-row        = 0.
       es_finding-fieldname  = CONV fieldname( lv_rollname ).
       es_finding-check_type = c_check-structure.
+      es_finding-severity   = c_severity-error.
       es_finding-message    = build_msg( iv_nr = '011' iv_a = lv_rollname ).
       RETURN.
     ENDIF.
@@ -870,6 +933,41 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     READ TABLE lt_findings INTO es_finding INDEX 1.
     es_finding-row       = 1.
     es_finding-fieldname = CONV fieldname( lv_rollname ).
+  ENDMETHOD.
+
+
+  METHOD display_findings.
+    TRY.
+        cl_salv_table=>factory(
+          IMPORTING r_salv_table = DATA(lo_alv)
+          CHANGING  t_table      = it_findings ).
+
+        lo_alv->get_columns( )->set_optimize( abap_true ).
+
+        IF iv_title IS NOT INITIAL.
+          lo_alv->get_display_settings( )->set_list_header(
+            CONV #( iv_title ) ).
+        ENDIF.
+
+        lo_alv->display( ).
+
+      CATCH cx_salv_msg ##NO_TEXT.
+        " no SALV on this system -> classic list instead, never raise
+        LOOP AT it_findings INTO DATA(ls_finding).
+          WRITE: / ls_finding-row, ls_finding-fieldname, ls_finding-value,
+                   ls_finding-severity, ls_finding-check_type,
+                   ls_finding-rule_id, ls_finding-message.
+        ENDLOOP.
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD normalize_severity.
+    IF iv_severity = c_severity-warning OR iv_severity = c_severity-info.
+      rv_severity = iv_severity.
+    ELSE.
+      rv_severity = c_severity-error.
+    ENDIF.
   ENDMETHOD.
 
 
@@ -930,14 +1028,16 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     " merge explicit rules on top
     LOOP AT mt_rules ASSIGNING FIELD-SYMBOL(<ls_rule>).
 
-      INSERT VALUE #( fieldname    = <ls_rule>-fieldname
-                      synthetic    = abap_true
-                      datatype     = 'CHAR'
-                      required     = <ls_rule>-required
-                      regex        = <ls_rule>-regex
-                      rule_ctab    = <ls_rule>-checktable
-                      rule_cfield  = <ls_rule>-checkfield
-                      rule_domname = <ls_rule>-domname )
+      INSERT VALUE #( fieldname     = <ls_rule>-fieldname
+                      synthetic     = abap_true
+                      datatype      = 'CHAR'
+                      required      = <ls_rule>-required
+                      regex         = <ls_rule>-regex
+                      rule_ctab     = <ls_rule>-checktable
+                      rule_cfield   = <ls_rule>-checkfield
+                      rule_domname  = <ls_rule>-domname
+                      rule_severity = normalize_severity( <ls_rule>-severity )
+                      rule_id       = <ls_rule>-rule_id )
              INTO TABLE rt_fields
              ASSIGNING FIELD-SYMBOL(<fs_field>).
 
@@ -962,6 +1062,12 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       IF <ls_rule>-domname IS NOT INITIAL.
         <fs_field>-rule_domname = <ls_rule>-domname.
       ENDIF.
+      IF <ls_rule>-rule_id IS NOT INITIAL.
+        <fs_field>-rule_id = <ls_rule>-rule_id.
+      ENDIF.
+
+      " normalized on purpose: E when initial, last rule wins
+      <fs_field>-rule_severity = normalize_severity( <ls_rule>-severity ).
 
     ENDLOOP.
 

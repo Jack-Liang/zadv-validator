@@ -44,6 +44,7 @@ DATA(lo_validator) = NEW zcl_adv_validator( ).
 lo_validator->add_rules( VALUE #(
   ( fieldname = 'EMAIL'  regex = `^[\w\.\-]+@[\w\.\-]+\.\w{2,}$` )
   ( fieldname = 'REMARK' required = abap_true )
+  ( fieldname = 'NOTIFY' regex = `^X?$` severity = 'W' rule_id = 'R01' )
   ( fieldname = 'WERKS'  checktable = 'T001W' ) ) ).  " 覆盖/补充 DDIC 检查表
 
 DATA(lt_findings) = lo_validator->validate( gt_upload ).
@@ -51,10 +52,15 @@ DATA(lt_findings) = lo_validator->validate( gt_upload ).
 IF lt_findings IS INITIAL.
   " 全部通过，可入库
 ELSE.
-  LOOP AT lt_findings ASSIGNING FIELD-SYMBOL(<fs_f>).
-    WRITE: / <fs_f>-row, <fs_f>-fieldname, <fs_f>-value,
-             <fs_f>-check_type, <fs_f>-message.
-  ENDLOOP.
+  " 直接展示：内置 SALV helper（无 SALV 系统自动回退经典列表）
+  zcl_adv_validator=>display_findings(
+      it_findings = lt_findings
+      iv_title    = 'Upload validation' ).
+
+  " 或自行处理，例如只拦截错误、放行警告：
+  " LOOP AT lt_findings TRANSPORTING NO FIELDS
+  "      WHERE severity = zcl_adv_validator=>c_severity-error.
+  " ENDLOOP.
 ENDIF.
 ```
 
@@ -138,6 +144,8 @@ WRITE: / zcl_adv_validator=>c_repository.          " 走类别名
 | `check_type` | STRUCTURE / REQUIRED / DOMAIN / CHECKTABLE / DATE / TIME / NUMC / REGEX |
 | `object` | 涉及对象：域名、`检查表/字段`（组合外键为 `检查表/字段1+字段2`）或 正则 |
 | `message` | 消息文本，取自 SE91 消息类 `ZADV_VALIDATOR`（001–015），可 SE63 翻译；调用方也可用前 5 个字段自建消息。注意占位符最长 50 字符，超长 `value` 会被截断，完整值请看 `value` 字段 |
+| `severity` | `E` / `W` / `I`（`c_severity-error/warning/info`），**永不为空**：DDIC 类检查恒为 `E`；规则类检查取规则 `severity`（缺省/非法值归一为 `E`） |
+| `rule_id` | 仅规则来源的 finding 填充（回显规则里的 `rule_id`，便于程序分支/统计）；DDIC 类 finding 保持空 |
 
 ## 工作原理
 
@@ -187,7 +195,7 @@ src/
   zadv_validator.msag.xml                 SE91 消息类 ZADV_VALIDATOR（001–015）
   zif_adv_metadata.intf.abap              元数据常量接口（版本/作者/仓库/许可/描述）
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，实现 ZIF_ADV_METADATA 暴露库元数据）
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（28 个用例）
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（32 个用例）
   zadv_demo.prog.abap                     演示报表
 ```
 
@@ -230,7 +238,9 @@ KNA1/MARA/VBAK/VBELN 等应用 DDIC 对象一律运行时解析（RTTI 动态建
 ### v1.1（延续）
 - [ ] **校验插件化**：抽出单列校验器接口（域值/检查表/格式/正则各自实现类），开放注册自定义校验
 - [ ] 跨字段与行间规则：如 DATE_FROM <= DATE_TO、文件内查重（依赖插件化）
-- [ ] finding 增强：severity（E/W/I）、规则 ID；BAL 应用日志与 ALV 输出 helper
+- [x] finding 增强（severity/规则 ID）：`ty_finding` 新增 `severity`（E/W/I，永不为空；DDIC 类恒 E，规则类取规则值）与 `rule_id`（仅规则来源回显）；`ty_rule` 新增 `severity`（缺省/非法归一 E）与 `rule_id`
+- [x] ALV 输出 helper：`display_findings( )` 静态方法（SALV 优化列宽 + 可选标题，无 SALV 回退经典列表）
+- [ ] BAL 应用日志 helper
 - [ ] 暂存 STRING 字段截断预检（超长值入库前预警）
 - [ ] 单测补遗：小写域、区间型域值（待选定跨版本稳定的样例域，或以 CDS/临时 DDIC 方式自建）
 - [ ] README 英文版

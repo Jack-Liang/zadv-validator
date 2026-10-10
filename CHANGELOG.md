@@ -1,5 +1,19 @@
 # 更新日志
 
+## 未发布
+
+- finding 增强（v1.1）：`ty_finding` 新增 `severity`（E/W/I，**永不为空**——DDIC 类
+  检查恒为 E，规则类检查取规则值）与 `rule_id`（仅规则来源回显，便于调用方
+  分支/统计）；`ty_rule` 新增 `severity`（初始/非法值经 normalize_severity 归一
+  为 E）与 `rule_id`。结构追加在尾部，既有按名赋值的代码不受影响
+- 新增 ALV 输出 helper 静态方法 `display_findings( it_findings iv_title )`：
+  SALV 优化列宽 + 可选标题，无 SALV 系统回退经典列表输出，不再抛出；
+  ZADV_DEMO 的 ALV 段改用该 helper（dogfooding）
+- 单测 28 → 32：规则 severity=W + rule_id 回显且同行 DDIC finding 恒 E 无
+  rule_id、规则缺省 severity 归一 E、非法 severity 回退 E、纯 DDIC finding
+  的 severity/rule_id 断言
+
+
 ## v1.0.0（2026-10）
 
 - demo：ZADV_DEMO 补 v1.0 特性演示段——组合外键（KNA1 LAND1+REGIO → T005A）、

@@ -113,7 +113,8 @@ CLASS lcl_ddic_demo IMPLEMENTATION.
     ELSE.
       LOOP AT lt_findings INTO DATA(ls_finding).
         WRITE: / `  row`, ls_finding-row, ls_finding-fieldname,
-                 ls_finding-value, ls_finding-check_type, ls_finding-object.
+                 ls_finding-value, ls_finding-severity,
+                 ls_finding-check_type, ls_finding-object.
       ENDLOOP.
     ENDIF.
     SKIP.
@@ -196,17 +197,8 @@ START-OF-SELECTION.
       ( cells = VALUE #( ( fieldname = 'NETWR' value = '1' )
                          ( fieldname = 'WAERS' value = 'ZZZ9' ) ) ) ) ).
 
-  TRY.
-      cl_salv_table=>factory(
-        IMPORTING r_salv_table = DATA(lo_alv)
-        CHANGING  t_table      = lt_findings ).
-
-      lo_alv->get_columns( )->set_optimize( abap_true ).
-      lo_alv->display( ).
-
-    CATCH cx_salv_msg.
-      LOOP AT lt_findings INTO DATA(ls_finding).
-        WRITE: / ls_finding-row, ls_finding-fieldname, ls_finding-value,
-                 ls_finding-check_type, ls_finding-message.
-      ENDLOOP.
-  ENDTRY.
+  " findings of the upload demo -> SALV via the built-in helper
+  " (classic list fallback is part of the helper)
+  zcl_adv_validator=>display_findings(
+      it_findings = lt_findings
+      iv_title    = |zadv-validator demo: { lines( lt_findings ) } findings| ).

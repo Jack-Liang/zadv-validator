@@ -51,6 +51,10 @@ CLASS ltcl_validate DEFINITION FINAL
       curr_quan_unit_t006      FOR TESTING,
       curr_quan_currency_tcurc FOR TESTING,
       metadata_exposed         FOR TESTING,
+      severity_warning_rule    FOR TESTING,
+      severity_default_error   FOR TESTING,
+      severity_invalid_value   FOR TESTING,
+      ddic_finding_severity_e  FOR TESTING,
 
       "! builds a standard table of the named DDIC structure at runtime;
       "! an unbound result means the type does not exist on this system
@@ -636,6 +640,88 @@ CLASS ltcl_validate IMPLEMENTATION.
         exp = zif_adv_metadata=>c_repository
         act = zcl_adv_validator=>c_repository
         msg = 'class alias diverges from interface constant' ).
+  ENDMETHOD.
+
+
+  METHOD severity_warning_rule.
+    " a rule with severity W marks only its own findings: the regex
+    " finding carries W and the rule id, the DDIC domain finding of the
+    " same row stays E without rule id
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_rule( VALUE #( fieldname = 'MAIL'
+                                     regex     = `^a+b*$`
+                                     severity  = zcl_adv_validator=>c_severity-warning
+                                     rule_id   = 'R_MAIL_FMT' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows( ( status = 'Z'
+                                                                 mail  = 'x' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 2 act = lines( lt_findings )
+        msg = 'domain and regex findings expected' ).
+
+    READ TABLE lt_findings INTO DATA(ls_domain)
+         WITH KEY check_type = zcl_adv_validator=>c_check-domain.
+    cl_abap_unit_assert=>assert_subrc( ).
+
+    READ TABLE lt_findings INTO DATA(ls_regex)
+         WITH KEY check_type = zcl_adv_validator=>c_check-regex.
+    cl_abap_unit_assert=>assert_subrc( ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'W' act = CONV string( ls_regex-severity )
+        msg = 'rule severity W must reach the rule finding' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'R_MAIL_FMT' act = CONV string( ls_regex-rule_id )
+        msg = 'rule id must be echoed into the finding' ).
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'E' act = CONV string( ls_domain-severity )
+        msg = 'DDIC findings stay error severity' ).
+    cl_abap_unit_assert=>assert_initial(
+        act = ls_domain-rule_id
+        msg = 'DDIC findings carry no rule id' ).
+  ENDMETHOD.
+
+
+  METHOD severity_default_error.
+    " no severity in the rule -> normalized to E
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_rule( VALUE #( fieldname = 'MAIL' required = abap_true ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows( ( mail = '' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'E' act = CONV string( lt_findings[ 1 ]-severity )
+        msg = 'initial rule severity must default to E' ).
+  ENDMETHOD.
+
+
+  METHOD severity_invalid_value.
+    " anything but W/I is normalized to E - never propagate garbage
+    DATA(lo_validator) = NEW zcl_adv_validator( ).
+    lo_validator->add_rule( VALUE #( fieldname = 'MAIL'
+                                     regex    = `^a+$`
+                                     severity = 'X' ) ).
+
+    DATA(lt_findings) = lo_validator->validate( VALUE ty_rows( ( mail = 'b' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'E' act = CONV string( lt_findings[ 1 ]-severity )
+        msg = 'invalid severity must fall back to E' ).
+  ENDMETHOD.
+
+
+  METHOD ddic_finding_severity_e.
+    " pure DDIC findings always carry a non-initial severity E
+    DATA(lt_findings) = NEW zcl_adv_validator( )=>validate(
+                            VALUE ty_rows( ( status = 'Z' ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+        exp = 'E' act = CONV string( lt_findings[ 1 ]-severity )
+        msg = 'DDIC finding severity must be E' ).
+    cl_abap_unit_assert=>assert_initial(
+        act = lt_findings[ 1 ]-rule_id
+        msg = 'DDIC finding must not carry a rule id' ).
   ENDMETHOD.
 
 
