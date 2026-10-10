@@ -644,7 +644,45 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       "! upper case, sorted and deduplicated for a deterministic key
       unique_fields
         IMPORTING is_rule           TYPE ty_unique_rule
-        RETURNING VALUE(rt_fields)  TYPE ty_values.
+        RETURNING VALUE(rt_fields)  TYPE ty_values,
+
+      "! only_fields whitelist first, then exclude_fields; unknown
+      "! whitelist names are reported (002). Replaces the previous list
+      apply_column_filters
+        CHANGING  ct_fields  TYPE ty_fields
+                  ct_findings TYPE ty_findings,
+
+      "! structural findings of the registered rules against one (empty)
+      "! row: rule/plugin fields that do not exist (003), comparison
+      "! rules with an unknown operator (020) or missing operands
+      rule_registration_findings
+        IMPORTING it_fields   TYPE ty_fields
+                  iv_struct   TYPE any
+        CHANGING  ct_findings TYPE ty_findings,
+
+      "! one field of one row through the built-in chain: required ->
+      "! initial passes -> format -> domain fixed values -> check table
+      "! (composite, then single) -> regex -> plugins. The first finding
+      "! wins, so at most one finding per field and row is returned
+      check_field
+        IMPORTING is_field           TYPE ty_field
+                  it_fields          TYPE ty_fields
+                  iv_row             TYPE i
+                  iv_struct          TYPE any
+                  ir_row             TYPE REF TO data
+        RETURNING VALUE(rt_findings) TYPE ty_findings,
+
+      "! effective check table of a field: an explicit rule check table
+      "! wins over the DDIC derived one
+      effective_ctab
+        IMPORTING is_field        TYPE ty_field
+        RETURNING VALUE(rv_table) TYPE tabname,
+
+      "! effective check table field: rule check field over the DD05S
+      "! mapped field over the field name
+      effective_cfield
+        IMPORTING is_field       TYPE ty_field
+        RETURNING VALUE(rv_field) TYPE fieldname.
 
     "! static on purpose: it is called via short form from the static
     "! check_value_* methods (instance methods cannot be called that
@@ -671,6 +709,31 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         IMPORTING it_findings   TYPE ty_findings
         RETURNING VALUE(rt_msgs) TYPE ty_bal_msgs,
 
+      "! finding skeleton prefilling everything the message class
+      "! findings share (row/field/value/check type/object, message via
+      "! build_msg, severity normalized - initial means E); the one
+      "! exception is the plugin finding, whose text does not come from
+      "! the message class
+      build_finding
+        IMPORTING iv_row       TYPE i
+                  iv_field     TYPE clike
+                  iv_value     TYPE clike OPTIONAL
+                  iv_check     TYPE clike
+                  iv_object    TYPE clike OPTIONAL
+                  iv_msgnr     TYPE ty_msgnr
+                  iv_a         TYPE clike OPTIONAL
+                  iv_b         TYPE clike OPTIONAL
+                  iv_c         TYPE clike OPTIONAL
+                  iv_severity  TYPE clike OPTIONAL
+                  iv_rule_id   TYPE clike OPTIONAL
+        RETURNING VALUE(rs_finding) TYPE ty_finding,
+
+      "! character-like DDIC datatype (see c_charlike): only those
+      "! truncate text silently on assignment to a shorter target
+      is_charlike_type
+        IMPORTING iv_datatype TYPE dfies-datatype
+        RETURNING VALUE(rv_ok) TYPE abap_bool,
+
       "! finding message text from the SE91 message class; operands for
       "! unused placeholders are supplied blank. clike by reference on
       "! purpose: it accepts the C(30) metadata arguments (fieldname,
@@ -692,11 +755,10 @@ CLASS zcl_adv_validator IMPLEMENTATION.
   METHOD validate.
 
     DATA: lv_row  TYPE i,
-          lr_line TYPE REF TO data,
-          lr_row  TYPE REF TO data.
+          lr_row  TYPE REF TO data,
+          lr_line TYPE REF TO data.
 
-    FIELD-SYMBOLS: <row> TYPE any,
-                   <val> TYPE any.
+    FIELD-SYMBOLS: <row> TYPE any.
 
     " ---------------------------------------------------------------------
     " 1) resolve the row structure
@@ -706,370 +768,81 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     DATA(lo_line)  = lo_table->get_table_line_type( ).
 
     IF lo_line->kind <> cl_abap_typedescr=>kind_struct.
-      APPEND VALUE #( row = 0 fieldname = '-'
-                      check_type = c_check-structure
-                      message   = build_msg( iv_nr = '001' )
-                      severity  = c_severity-error )
+      APPEND build_finding( iv_row   = 0
+                            iv_field = '-'
+                            iv_check = c_check-structure
+                            iv_msgnr = '001' )
              TO rt_findings.
       RETURN.
     ENDIF.
 
     DATA(lo_struct) = CAST cl_abap_structdescr( lo_line ).
+
+    " ---------------------------------------------------------------------
+    " 2) field list: DDIC metadata, explicit rules, plugin registrations
+    " ---------------------------------------------------------------------
     DATA(lt_fields) = build_fields( lo_struct ).
 
     " ---------------------------------------------------------------------
-    " 2) column filter: only_fields whitelist first, then exclude_fields
+    " 3) column filters: only_fields whitelist, then exclude_fields
     " ---------------------------------------------------------------------
-    IF mt_only_fields IS NOT INITIAL.
-      DATA lt_filtered TYPE ty_fields.
-      LOOP AT lt_fields ASSIGNING FIELD-SYMBOL(<fs_filter>).
-        READ TABLE mt_only_fields TRANSPORTING NO FIELDS
-             WITH TABLE KEY table_line = <fs_filter>-fieldname.
-        IF sy-subrc = 0.
-          INSERT <fs_filter> INTO TABLE lt_filtered.
-        ENDIF.
-      ENDLOOP.
-      LOOP AT mt_only_fields INTO DATA(lv_only).
-        READ TABLE lt_filtered TRANSPORTING NO FIELDS
-             WITH TABLE KEY fieldname = lv_only.
-        IF sy-subrc <> 0.
-          APPEND VALUE #( row = 0 fieldname = lv_only
-                          check_type = c_check-structure
-                          message   = build_msg( iv_nr = '002'
-                                                  iv_a  = lv_only )
-                          severity  = c_severity-error )
-                 TO rt_findings.
-        ENDIF.
-      ENDLOOP.
-      lt_fields = lt_filtered.
-    ENDIF.
-
-    IF mt_exclude_fields IS NOT INITIAL.
-      LOOP AT mt_exclude_fields INTO DATA(lv_exclude).
-        DELETE lt_fields WHERE fieldname = lv_exclude.
-      ENDLOOP.
-    ENDIF.
+    apply_column_filters( CHANGING ct_fields   = lt_fields
+                          ct_findings  = rt_findings ).
 
     " ---------------------------------------------------------------------
-    " 3.5) DD05S foreign key mapping for the DDIC derived check tables
+    " 4) DD05S foreign key mapping, currency/unit code references
     " ---------------------------------------------------------------------
     resolve_foreign_keys(
       EXPORTING iv_structname = CONV #( lo_struct->get_relative_name( ) )
       CHANGING  ct_fields     = lt_fields ).
 
-    " ---------------------------------------------------------------------
-    " 3.6) currency/unit code columns referenced by CURR/QUAN amounts
-    " ---------------------------------------------------------------------
     resolve_curr_quan( CHANGING ct_fields = lt_fields ).
 
     " ---------------------------------------------------------------------
-    " 3) rules referencing fields that do not exist -> structural findings
+    " 5) structural checks of the registered rules: unknown rule/plugin
+    "    fields, comparison operators and operands, uniqueness fields
+    "    (an empty row is enough for the component existence tests)
     " ---------------------------------------------------------------------
     CREATE DATA lr_line TYPE HANDLE lo_struct.
     ASSIGN lr_line->* TO <row>.
 
-    LOOP AT lt_fields ASSIGNING FIELD-SYMBOL(<fs_chk>) WHERE synthetic = abap_true.
-      ASSIGN COMPONENT <fs_chk>-fieldname OF STRUCTURE <row> TO <val>.
-      IF sy-subrc <> 0.
-        APPEND VALUE #( row = 0 fieldname = <fs_chk>-fieldname
-                        check_type = c_check-structure
-                        message   = build_msg( iv_nr = '003'
-                                                iv_a  = <fs_chk>-fieldname )
-                        severity  = c_severity-error )
-               TO rt_findings.
-      ENDIF.
-    ENDLOOP.
+    rule_registration_findings( EXPORTING it_fields   = lt_fields
+                                          iv_struct   = <row>
+                                CHANGING  ct_findings = rt_findings ).
 
     " ---------------------------------------------------------------------
-    " 3.7) declarative comparison rules: operator must be known, both
-    "      operands must exist; uniqueness rules: fields must exist
-    " ---------------------------------------------------------------------
-    LOOP AT mt_compare_rules ASSIGNING FIELD-SYMBOL(<fs_crchk>).
-      IF <fs_crchk>-operator <> 'EQ' AND <fs_crchk>-operator <> 'NE'
-         AND <fs_crchk>-operator <> 'LT' AND <fs_crchk>-operator <> 'LE'
-         AND <fs_crchk>-operator <> 'GT' AND <fs_crchk>-operator <> 'GE'.
-        APPEND VALUE #( row = 0 fieldname = <fs_crchk>-field
-                        check_type = c_check-structure
-                        message   = build_msg( iv_nr = '020'
-                                                iv_a  = <fs_crchk>-operator )
-                        severity  = c_severity-error )
-               TO rt_findings.
-      ENDIF.
-      ASSIGN COMPONENT <fs_crchk>-field OF STRUCTURE <row> TO <val>.
-      IF sy-subrc <> 0.
-        APPEND VALUE #( row = 0 fieldname = <fs_crchk>-field
-                        check_type = c_check-structure
-                        message   = build_msg( iv_nr = '003'
-                                                iv_a  = <fs_crchk>-field )
-                        severity  = c_severity-error )
-               TO rt_findings.
-      ENDIF.
-      ASSIGN COMPONENT <fs_crchk>-other OF STRUCTURE <row> TO <val>.
-      IF sy-subrc <> 0.
-        APPEND VALUE #( row = 0 fieldname = <fs_crchk>-other
-                        check_type = c_check-structure
-                        message   = build_msg( iv_nr = '003'
-                                                iv_a  = <fs_crchk>-other )
-                        severity  = c_severity-error )
-               TO rt_findings.
-      ENDIF.
-    ENDLOOP.
-
-    LOOP AT mt_unique_rules ASSIGNING FIELD-SYMBOL(<fs_urchk>).
-      LOOP AT unique_fields( <fs_urchk> ) INTO DATA(lv_ufield).
-        ASSIGN COMPONENT lv_ufield OF STRUCTURE <row> TO <val>.
-        IF sy-subrc <> 0.
-          APPEND VALUE #( row = 0 fieldname = lv_ufield
-                          check_type = c_check-structure
-                          message   = build_msg( iv_nr = '003'
-                                                  iv_a  = lv_ufield )
-                          severity  = c_severity-error )
-                 TO rt_findings.
-        ENDIF.
-      ENDLOOP.
-    ENDLOOP.
-
-    " ---------------------------------------------------------------------
-    " 4) prefill the check-table lookup cache in chunked batches
+    " 6) prefill the check-table lookup cache in chunked batches
     " ---------------------------------------------------------------------
     prefetch_checktables( it_data = it_data it_fields = lt_fields ).
     prefetch_foreign_keys( it_data = it_data it_fields = lt_fields ).
 
     " ---------------------------------------------------------------------
-    " 5) row loop
+    " 7) row loop: per field checks + comparisons. Manual counter on
+    "    purpose: sy-tabix is not filled for hashed tables; the offset
+    "    keeps global row numbers across slices
     " ---------------------------------------------------------------------
-    " manual counter on purpose: sy-tabix is not filled for hashed
-    " tables; the offset keeps global row numbers across slices
     lv_row = iv_row_offset.
     LOOP AT it_data ASSIGNING <row>.
       lv_row = lv_row + 1.
       GET REFERENCE OF <row> INTO lr_row.
 
       LOOP AT lt_fields ASSIGNING FIELD-SYMBOL(<fs_field>).
-
-        ASSIGN COMPONENT <fs_field>-fieldname OF STRUCTURE <row> TO <val>.
-        IF sy-subrc <> 0.
-          CONTINUE.
-        ENDIF.
-
-        DATA(lv_disp) = CONV string( <val> ).
-
-        " required ........................................................
-        IF <fs_field>-required = abap_true AND <val> IS INITIAL.
-          APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
-                          value = lv_disp
-                          check_type = c_check-required
-                          message = build_msg( iv_nr = '004'
-                                               iv_a  = <fs_field>-fieldname )
-                          severity = <fs_field>-rule_severity
-                          rule_id  = <fs_field>-rule_id )
-                 TO rt_findings.
-          CONTINUE.
-        ENDIF.
-
-        " initial values pass all other checks ............................
-        IF <val> IS INITIAL.
-          CONTINUE.
-        ENDIF.
-
-        " format checks ....................................................
-        CASE <fs_field>-datatype.
-          WHEN 'DATS'.
-            IF check_date( lv_disp ) = abap_false.
-              APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
-                              value = lv_disp
-                              check_type = c_check-date
-                              message = build_msg( iv_nr = '005'
-                                                   iv_a  = lv_disp )
-                              severity  = c_severity-error )
-                     TO rt_findings.
-              CONTINUE.
-            ENDIF.
-          WHEN 'TIMS'.
-            IF check_time( lv_disp ) = abap_false.
-              APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
-                              value = lv_disp
-                              check_type = c_check-time
-                              message = build_msg( iv_nr = '006'
-                                                   iv_a  = lv_disp )
-                              severity  = c_severity-error )
-                     TO rt_findings.
-              CONTINUE.
-            ENDIF.
-          WHEN 'NUMC'.
-            IF check_numc( lv_disp ) = abap_false.
-              APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
-                              value = lv_disp
-                              check_type = c_check-numc
-                              message = build_msg( iv_nr = '007'
-                                                   iv_a  = lv_disp )
-                              severity  = c_severity-error )
-                     TO rt_findings.
-              CONTINUE.
-            ENDIF.
-        ENDCASE.
-
-        " domain fixed values .............................................
-        DATA(lv_dom) = COND #( WHEN <fs_field>-rule_domname IS NOT INITIAL
-                              THEN <fs_field>-rule_domname
-                              ELSE <fs_field>-domname ).
-
-        " comparison value in internal format (conversion exit + case)
-        DATA(lv_int) = internal_value( is_field = <fs_field>
-                                       iv_disp  = lv_disp ).
-
-        DATA lv_has_fixed_values TYPE abap_bool VALUE abap_false.
-        IF lv_dom IS NOT INITIAL.
-          DATA(ls_dom) = get_domain( lv_dom ).
-          lv_has_fixed_values = xsdbool( ls_dom-values IS NOT INITIAL ).
-        ENDIF.
-
-        IF lv_has_fixed_values = abap_true AND
-           check_domain( iv_domname = lv_dom iv_value = lv_int ) = abap_false.
-          APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
-                          value = lv_disp object = lv_dom
-                          check_type = c_check-domain
-                          message = build_msg( iv_nr = '008'
-                                               iv_a  = lv_disp
-                                               iv_b  = lv_dom )
-                          severity = COND ty_severity(
-                                       WHEN <fs_field>-rule_domname IS NOT INITIAL
-                                       THEN <fs_field>-rule_severity
-                                       ELSE c_severity-error )
-                          rule_id  = COND #( WHEN <fs_field>-rule_domname IS NOT INITIAL
-                                             THEN <fs_field>-rule_id ) )
-                 TO rt_findings.
-          CONTINUE.
-        ENDIF.
-
-        " check table (rule overrides DDIC) ...............................
-        DATA(lv_ctab) = COND #( WHEN <fs_field>-rule_ctab IS NOT INITIAL
-                                THEN <fs_field>-rule_ctab
-                                ELSE <fs_field>-checktable ).
-        DATA(lv_cfld) = COND #( WHEN <fs_field>-rule_cfield IS NOT INITIAL
-                                THEN <fs_field>-rule_cfield
-                                WHEN <fs_field>-fkey_checkfield IS NOT INITIAL
-                                THEN <fs_field>-fkey_checkfield
-                                ELSE <fs_field>-fieldname ).
-
-        DATA: lv_keysig   TYPE string,
-              lv_tuple    TYPE string,
-              lv_complete TYPE abap_bool,
-              lv_composed TYPE abap_bool.
-
-        CLEAR: lv_tuple, lv_complete, lv_composed.
-
-        IF lv_ctab IS NOT INITIAL AND
-           <fs_field>-fkey_partners IS NOT INITIAL.
-
-          " composite DDIC foreign key: validate the value combination;
-          " an incomplete tuple (initial partner) degrades to the single
-          " field check below
-          build_fkey_tuple( EXPORTING is_field = <fs_field>
-                                      it_fields = lt_fields
-                                      iv_struct = <row>
-                                      iv_value  = lv_int
-                            IMPORTING ev_tuple    = lv_tuple
-                                      ev_complete = lv_complete ).
-
-          IF lv_complete = abap_true.
-            lv_keysig = ckey_keysig( <fs_field> ).
-
-            IF check_foreign_key( iv_table  = lv_ctab
-                                  iv_keysig = lv_keysig
-                                  iv_tuple  = lv_tuple ) = abap_false.
-              APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
-                              value = lv_disp object = |{ lv_ctab }/{ lv_keysig }|
-                              check_type = c_check-checktable
-                              message = build_msg( iv_nr = '015'
-                                                   iv_a  = lv_disp
-                                                   iv_b  = lv_ctab
-                                                   iv_c  = lv_keysig )
-                              severity  = c_severity-error )
-                     TO rt_findings.
-              CONTINUE.
-            ENDIF.
-
-            " composite check passed -> the single field check is skipped
-            lv_composed = abap_true.
-          ENDIF.
-
-        ENDIF.
-
-        IF lv_ctab IS NOT INITIAL AND lv_composed = abap_false AND
-           check_table( iv_table = lv_ctab iv_field = lv_cfld iv_value = lv_int ) = abap_false.
-          APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
-                          value = lv_disp object = |{ lv_ctab }/{ lv_cfld }|
-                          check_type = c_check-checktable
-                          message = build_msg( iv_nr = '009'
-                                               iv_a  = lv_disp
-                                               iv_b  = lv_ctab
-                                               iv_c  = lv_cfld )
-                          severity = COND ty_severity(
-                                       WHEN <fs_field>-rule_ctab IS NOT INITIAL
-                                       THEN <fs_field>-rule_severity
-                                       ELSE c_severity-error )
-                          rule_id  = COND #( WHEN <fs_field>-rule_ctab IS NOT INITIAL
-                                             THEN <fs_field>-rule_id ) )
-                 TO rt_findings.
-          CONTINUE.
-        ENDIF.
-
-        " regex rule ......................................................
-        " FIND REGEX instead of predicate function matches( ) - predicate
-        " functions cannot be compared with = and are not available on
-        " older support packages
-        IF <fs_field>-regex IS NOT INITIAL.
-          FIND REGEX <fs_field>-regex IN lv_disp.
-          IF sy-subrc <> 0.
-            APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
-                            value = lv_disp object = <fs_field>-regex
-                            check_type = c_check-regex
-                            message = build_msg( iv_nr = '010'
-                                                 iv_a  = lv_disp )
-                            severity = <fs_field>-rule_severity
-                            rule_id  = <fs_field>-rule_id )
-                   TO rt_findings.
-            CONTINUE.
-          ENDIF.
-        ENDIF.
-
-        " registered column checks (plugins) ..........................
-        " they run last: only values the validator itself accepted reach
-        " them, the first failing plugin finishes the field
-        LOOP AT mt_plugins ASSIGNING FIELD-SYMBOL(<fs_plugin>)
-             WHERE fieldname = <fs_field>-fieldname.
-
-          DATA(ls_result) = <fs_plugin>-check->check(
-                              iv_row       = lv_row
-                              iv_fieldname = <fs_field>-fieldname
-                              iv_value     = lv_disp
-                              ir_row       = lr_row ).
-
-          IF ls_result-ok <> abap_true.
-            APPEND VALUE #( row = lv_row fieldname = <fs_field>-fieldname
-                            value = lv_disp
-                            object = ls_result-object
-                            check_type = c_check-plugin
-                            message = ls_result-message
-                            severity = normalize_severity( ls_result-severity )
-                            rule_id  = ls_result-rule_id )
-                   TO rt_findings.
-            EXIT.
-          ENDIF.
-        ENDLOOP.
-
+        APPEND LINES OF check_field( is_field  = <fs_field>
+                                     it_fields = lt_fields
+                                     iv_row    = lv_row
+                                     iv_struct = <row>
+                                     ir_row    = lr_row ) TO rt_findings.
       ENDLOOP.
 
       " declarative cross field comparisons of this row. They are row
       " level rules and run independently of the column filters and of
       " the per-field first-error-wins chain above
-      APPEND LINES OF compare_findings( iv_row   = lv_row
+      APPEND LINES OF compare_findings( iv_row    = lv_row
                                         iv_struct = <row> ) TO rt_findings.
     ENDLOOP.
 
     " ---------------------------------------------------------------------
-    " 6) file level duplicate rules (first occurrence passes)
+    " 8) file level duplicate rules (first occurrence passes)
     " ---------------------------------------------------------------------
     APPEND LINES OF unique_findings( it_data   = it_data
                                      iv_offset = iv_row_offset )
@@ -1316,11 +1089,11 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     ENDIF.
 
     IF lo_struct IS INITIAL OR lo_struct->is_ddic_type( ) = abap_false.
-      es_finding-row        = 0.
-      es_finding-fieldname  = CONV fieldname( lv_field ).
-      es_finding-check_type = c_check-structure.
-      es_finding-severity   = c_severity-error.
-      es_finding-message    = build_msg( iv_nr = '012' iv_a = lv_tabname ).
+      es_finding = build_finding( iv_row   = 0
+                                  iv_field = lv_field
+                                  iv_check = c_check-structure
+                                  iv_msgnr = '012'
+                                  iv_a     = lv_tabname ).
       RETURN.
     ENDIF.
 
@@ -1332,24 +1105,22 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
     READ TABLE lt_dfies INTO DATA(ls_dfies) WITH KEY fieldname = lv_field.
     IF sy-subrc <> 0.
-      es_finding-row        = 0.
-      es_finding-fieldname  = CONV fieldname( lv_field ).
-      es_finding-check_type = c_check-structure.
-      es_finding-severity   = c_severity-error.
-      es_finding-message    = build_msg( iv_nr = '013'
-                                         iv_a  = lv_field
-                                         iv_b  = lv_tabname ).
+      es_finding = build_finding( iv_row   = 0
+                                  iv_field = lv_field
+                                  iv_check = c_check-structure
+                                  iv_msgnr = '013'
+                                  iv_a     = lv_field
+                                  iv_b     = lv_tabname ).
       RETURN.
     ENDIF.
 
     IF ls_dfies-rollname IS INITIAL.
-      es_finding-row        = 0.
-      es_finding-fieldname  = CONV fieldname( lv_field ).
-      es_finding-check_type = c_check-structure.
-      es_finding-severity   = c_severity-error.
-      es_finding-message    = build_msg( iv_nr = '014'
-                                         iv_a  = lv_field
-                                         iv_b  = lv_tabname ).
+      es_finding = build_finding( iv_row   = 0
+                                  iv_field = lv_field
+                                  iv_check = c_check-structure
+                                  iv_msgnr = '014'
+                                  iv_a     = lv_field
+                                  iv_b     = lv_tabname ).
       RETURN.
     ENDIF.
 
@@ -1383,11 +1154,11 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     IF lo_descr IS INITIAL
        OR lo_descr->kind <> cl_abap_typedescr=>kind_elem
        OR CAST cl_abap_elemdescr( lo_descr )->is_ddic_type( ) = abap_false.
-      es_finding-row        = 0.
-      es_finding-fieldname  = CONV fieldname( lv_rollname ).
-      es_finding-check_type = c_check-structure.
-      es_finding-severity   = c_severity-error.
-      es_finding-message    = build_msg( iv_nr = '011' iv_a = lv_rollname ).
+      es_finding = build_finding( iv_row   = 0
+                                  iv_field = lv_rollname
+                                  iv_check = c_check-structure
+                                  iv_msgnr = '011'
+                                  iv_a     = lv_rollname ).
       RETURN.
     ENDIF.
 
@@ -1550,10 +1321,11 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     ENDIF.
 
     IF lv_badtype = abap_true OR lt_dfies IS INITIAL.
-      APPEND VALUE #( row = 0 fieldname = '-'
-                      check_type = c_check-structure
-                      message = build_msg( iv_nr = '012' iv_a = lv_typename )
-                      severity = c_severity-error )
+      APPEND build_finding( iv_row   = 0
+                            iv_field = '-'
+                            iv_check = c_check-structure
+                            iv_msgnr = '012'
+                            iv_a     = lv_typename )
              TO rt_findings.
       RETURN.
     ENDIF.
@@ -1563,10 +1335,10 @@ CLASS zcl_adv_validator IMPLEMENTATION.
     DATA(lo_line)  = lo_table->get_table_line_type( ).
 
     IF lo_line->kind <> cl_abap_typedescr=>kind_struct.
-      APPEND VALUE #( row = 0 fieldname = '-'
-                      check_type = c_check-structure
-                      message = build_msg( iv_nr = '001' )
-                      severity = c_severity-error )
+      APPEND build_finding( iv_row   = 0
+                            iv_field = '-'
+                            iv_check = c_check-structure
+                            iv_msgnr = '001' )
              TO rt_findings.
       RETURN.
     ENDIF.
@@ -1595,15 +1367,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
         " only character-like target columns truncate text silently;
         " amounts and quantities refuse the assignment or convert
-        CHECK <ls_dtarget>-datatype = c_charlike-char
-           OR <ls_dtarget>-datatype = c_charlike-numc
-           OR <ls_dtarget>-datatype = c_charlike-dats
-           OR <ls_dtarget>-datatype = c_charlike-tims
-           OR <ls_dtarget>-datatype = c_charlike-accp
-           OR <ls_dtarget>-datatype = c_charlike-lang
-           OR <ls_dtarget>-datatype = c_charlike-unit
-           OR <ls_dtarget>-datatype = c_charlike-cuky
-           OR <ls_dtarget>-datatype = c_charlike-clnt.
+        CHECK is_charlike_type( <ls_dtarget>-datatype ) = abap_true.
 
         READ TABLE lt_skip TRANSPORTING NO FIELDS
              WITH TABLE KEY table_line = <ls_dtarget>-fieldname.
@@ -1624,17 +1388,17 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         " string conversion strips trailing blanks of CHAR columns, so
         " this is the length the assignment would really have to fit
         IF strlen( lv_text ) > <ls_dtarget>-leng.
-          APPEND VALUE #( row = lv_row fieldname = <ls_dtarget>-fieldname
-                          value = lv_text
-                          object = |{ lv_typename }/{ <ls_dtarget>-fieldname }|
-                          check_type = c_check-truncation
-                          message = build_msg(
-                              iv_nr = '019'
-                              iv_a  = <ls_dtarget>-fieldname
-                              iv_b  = |{ strlen( lv_text ) }|
-                              iv_c  = |{ <ls_dtarget>-leng ALPHA = OUT }| )
-                          severity = lv_severity )
-                 TO rt_findings.
+          APPEND build_finding( iv_row      = lv_row
+                                iv_field    = <ls_dtarget>-fieldname
+                                iv_value    = lv_text
+                                iv_check    = c_check-truncation
+                                iv_object   = |{ lv_typename }/{ <ls_dtarget>-fieldname }|
+                                iv_msgnr    = '019'
+                                iv_a        = <ls_dtarget>-fieldname
+                                iv_b        = |{ strlen( lv_text ) }|
+                                iv_c        = |{ <ls_dtarget>-leng ALPHA = OUT }|
+                                iv_severity = lv_severity )
+               TO rt_findings.
         ENDIF.
       ENDLOOP.
     ENDLOOP.
@@ -2120,15 +1884,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       " composite foreign keys are prefetched by prefetch_foreign_keys
       CHECK <fs_pfield>-fkey_partners IS INITIAL.
 
-      DATA(lv_ctab) = COND #( WHEN <fs_pfield>-rule_ctab IS NOT INITIAL
-                              THEN <fs_pfield>-rule_ctab
-                              ELSE <fs_pfield>-checktable ).
+      DATA(lv_ctab) = effective_ctab( <fs_pfield> ).
       CHECK lv_ctab IS NOT INITIAL.
-      DATA(lv_cfld) = COND #( WHEN <fs_pfield>-rule_cfield IS NOT INITIAL
-                              THEN <fs_pfield>-rule_cfield
-                              WHEN <fs_pfield>-fkey_checkfield IS NOT INITIAL
-                              THEN <fs_pfield>-fkey_checkfield
-                              ELSE <fs_pfield>-fieldname ).
+      DATA(lv_cfld) = effective_cfield( <fs_pfield> ).
 
       LOOP AT it_data ASSIGNING FIELD-SYMBOL(<fs_prow>).
         ASSIGN COMPONENT <fs_pfield>-fieldname OF STRUCTURE <fs_prow>
@@ -2240,7 +1998,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
       CHECK <fs_ffield>-fkey_partners IS NOT INITIAL.
 
-      DATA(lv_ctab)   = <fs_ffield>-checktable.
+      " rule specified check tables never reach this method (loop WHERE
+      " above), effective_ctab( ) therefore resolves to checktable here
+      DATA(lv_ctab)   = effective_ctab( <fs_ffield> ).
       DATA(lv_keysig) = ckey_keysig( <fs_ffield> ).
       DATA(lt_cflds)  = ckey_fields( <fs_ffield> ).
 
@@ -2285,10 +2045,7 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
           " sparse row: the single field fallback of the row loop will
           " consult the single column cache -> prefetch the own value
-          DATA(lv_sfld) = COND fieldname(
-                            WHEN <fs_ffield>-fkey_checkfield IS NOT INITIAL
-                            THEN <fs_ffield>-fkey_checkfield
-                            ELSE <fs_ffield>-fieldname ).
+          DATA(lv_sfld) = effective_cfield( <fs_ffield> ).
 
           READ TABLE mt_ctab_hits TRANSPORTING NO FIELDS
                WITH TABLE KEY tabname = lv_ctab
@@ -2537,6 +2294,345 @@ CLASS zcl_adv_validator IMPLEMENTATION.
   ENDMETHOD.
 
 
+  METHOD apply_column_filters.
+
+    " whitelist first: unknown names are reported (002), the list is
+    " replaced as a whole
+    IF mt_only_fields IS NOT INITIAL.
+      DATA lt_filtered TYPE ty_fields.
+      LOOP AT ct_fields ASSIGNING FIELD-SYMBOL(<fs_filter>).
+        READ TABLE mt_only_fields TRANSPORTING NO FIELDS
+             WITH TABLE KEY table_line = <fs_filter>-fieldname.
+        IF sy-subrc = 0.
+          INSERT <fs_filter> INTO TABLE lt_filtered.
+        ENDIF.
+      ENDLOOP.
+      LOOP AT mt_only_fields INTO DATA(lv_only).
+        READ TABLE lt_filtered TRANSPORTING NO FIELDS
+             WITH TABLE KEY fieldname = lv_only.
+        IF sy-subrc <> 0.
+          APPEND build_finding( iv_row   = 0
+                                iv_field = lv_only
+                                iv_check = c_check-structure
+                                iv_msgnr = '002'
+                                iv_a     = lv_only )
+                 TO ct_findings.
+        ENDIF.
+      ENDLOOP.
+      ct_fields = lt_filtered.
+    ENDIF.
+
+    " blacklist second, applied within the whitelist restriction
+    IF mt_exclude_fields IS NOT INITIAL.
+      LOOP AT mt_exclude_fields INTO DATA(lv_exclude).
+        DELETE ct_fields WHERE fieldname = lv_exclude.
+      ENDLOOP.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD rule_registration_findings.
+
+    " rule and plugin fields that do not exist in the structure
+    LOOP AT it_fields ASSIGNING FIELD-SYMBOL(<fs_chk>) WHERE synthetic = abap_true.
+      ASSIGN COMPONENT <fs_chk>-fieldname OF STRUCTURE iv_struct TO FIELD-SYMBOL(<val>).
+      IF sy-subrc <> 0.
+        APPEND build_finding( iv_row   = 0
+                              iv_field = <fs_chk>-fieldname
+                              iv_check = c_check-structure
+                              iv_msgnr = '003'
+                              iv_a     = <fs_chk>-fieldname )
+               TO ct_findings.
+      ENDIF.
+    ENDLOOP.
+
+    " comparison rules: the operator must be known, both operands must
+    " exist
+    LOOP AT mt_compare_rules ASSIGNING FIELD-SYMBOL(<fs_crchk>).
+      IF <fs_crchk>-operator <> 'EQ' AND <fs_crchk>-operator <> 'NE'
+         AND <fs_crchk>-operator <> 'LT' AND <fs_crchk>-operator <> 'LE'
+         AND <fs_crchk>-operator <> 'GT' AND <fs_crchk>-operator <> 'GE'.
+        APPEND build_finding( iv_row   = 0
+                              iv_field = <fs_crchk>-field
+                              iv_check = c_check-structure
+                              iv_msgnr = '020'
+                              iv_a     = <fs_crchk>-operator )
+               TO ct_findings.
+      ENDIF.
+      ASSIGN COMPONENT <fs_crchk>-field OF STRUCTURE iv_struct TO <val>.
+      IF sy-subrc <> 0.
+        APPEND build_finding( iv_row   = 0
+                              iv_field = <fs_crchk>-field
+                              iv_check = c_check-structure
+                              iv_msgnr = '003'
+                              iv_a     = <fs_crchk>-field )
+               TO ct_findings.
+      ENDIF.
+      ASSIGN COMPONENT <fs_crchk>-other OF STRUCTURE iv_struct TO <val>.
+      IF sy-subrc <> 0.
+        APPEND build_finding( iv_row   = 0
+                              iv_field = <fs_crchk>-other
+                              iv_check = c_check-structure
+                              iv_msgnr = '003'
+                              iv_a     = <fs_crchk>-other )
+               TO ct_findings.
+      ENDIF.
+    ENDLOOP.
+
+    " uniqueness rules: every field of the combination must exist
+    LOOP AT mt_unique_rules ASSIGNING FIELD-SYMBOL(<fs_urchk>).
+      LOOP AT unique_fields( <fs_urchk> ) INTO DATA(lv_ufield).
+        ASSIGN COMPONENT lv_ufield OF STRUCTURE iv_struct TO <val>.
+        IF sy-subrc <> 0.
+          APPEND build_finding( iv_row   = 0
+                                iv_field = lv_ufield
+                                iv_check = c_check-structure
+                                iv_msgnr = '003'
+                                iv_a     = lv_ufield )
+                 TO ct_findings.
+        ENDIF.
+      ENDLOOP.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD check_field.
+
+    ASSIGN COMPONENT is_field-fieldname OF STRUCTURE iv_struct
+           TO FIELD-SYMBOL(<val>).
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+
+    DATA(lv_disp) = CONV string( <val> ).
+
+    " required ........................................................
+    IF is_field-required = abap_true AND <val> IS INITIAL.
+      APPEND build_finding( iv_row      = iv_row
+                            iv_field    = is_field-fieldname
+                            iv_value    = lv_disp
+                            iv_check    = c_check-required
+                            iv_msgnr    = '004'
+                            iv_a        = is_field-fieldname
+                            iv_severity = is_field-rule_severity
+                            iv_rule_id  = is_field-rule_id )
+             TO rt_findings.
+      RETURN.
+    ENDIF.
+
+    " initial values pass all other checks ............................
+    IF <val> IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    " format checks ....................................................
+    CASE is_field-datatype.
+      WHEN 'DATS'.
+        IF check_date( lv_disp ) = abap_false.
+          APPEND build_finding( iv_row   = iv_row
+                                iv_field = is_field-fieldname
+                                iv_value = lv_disp
+                                iv_check = c_check-date
+                                iv_msgnr = '005'
+                                iv_a     = lv_disp )
+                 TO rt_findings.
+          RETURN.
+        ENDIF.
+      WHEN 'TIMS'.
+        IF check_time( lv_disp ) = abap_false.
+          APPEND build_finding( iv_row   = iv_row
+                                iv_field = is_field-fieldname
+                                iv_value = lv_disp
+                                iv_check = c_check-time
+                                iv_msgnr = '006'
+                                iv_a     = lv_disp )
+                 TO rt_findings.
+          RETURN.
+        ENDIF.
+      WHEN 'NUMC'.
+        IF check_numc( lv_disp ) = abap_false.
+          APPEND build_finding( iv_row   = iv_row
+                                iv_field = is_field-fieldname
+                                iv_value = lv_disp
+                                iv_check = c_check-numc
+                                iv_msgnr = '007'
+                                iv_a     = lv_disp )
+                 TO rt_findings.
+          RETURN.
+        ENDIF.
+    ENDCASE.
+
+    " domain fixed values .............................................
+    DATA(lv_dom) = COND #( WHEN is_field-rule_domname IS NOT INITIAL
+                           THEN is_field-rule_domname
+                           ELSE is_field-domname ).
+
+    " comparison value in internal format (conversion exit + case)
+    DATA(lv_int) = internal_value( is_field = is_field
+                                   iv_disp  = lv_disp ).
+
+    IF lv_dom IS NOT INITIAL.
+      DATA(ls_dom) = get_domain( lv_dom ).
+      IF ls_dom-values IS NOT INITIAL AND
+         check_domain( iv_domname = lv_dom iv_value = lv_int ) = abap_false.
+        APPEND build_finding( iv_row      = iv_row
+                              iv_field    = is_field-fieldname
+                              iv_value    = lv_disp
+                              iv_check    = c_check-domain
+                              iv_object   = lv_dom
+                              iv_msgnr    = '008'
+                              iv_a        = lv_disp
+                              iv_b        = lv_dom
+                              iv_severity = COND ty_severity(
+                                  WHEN is_field-rule_domname IS NOT INITIAL
+                                  THEN is_field-rule_severity
+                                  ELSE c_severity-error )
+                              iv_rule_id  = COND #(
+                                  WHEN is_field-rule_domname IS NOT INITIAL
+                                  THEN is_field-rule_id ) )
+             TO rt_findings.
+        RETURN.
+      ENDIF.
+    ENDIF.
+
+    " check table (rule overrides DDIC) ...............................
+    DATA(lv_ctab) = effective_ctab( is_field ).
+    DATA(lv_cfld) = effective_cfield( is_field ).
+
+    DATA: lv_keysig   TYPE string,
+          lv_tuple    TYPE string,
+          lv_complete TYPE abap_bool,
+          lv_composed TYPE abap_bool.
+
+    CLEAR: lv_tuple, lv_complete, lv_composed.
+
+    IF lv_ctab IS NOT INITIAL AND
+       is_field-fkey_partners IS NOT INITIAL.
+
+      " composite DDIC foreign key: validate the value combination; an
+      " incomplete tuple (initial partner) degrades to the single field
+      " check below
+      build_fkey_tuple( EXPORTING is_field  = is_field
+                                  it_fields = it_fields
+                                  iv_struct = iv_struct
+                                  iv_value  = lv_int
+                        IMPORTING ev_tuple    = lv_tuple
+                                  ev_complete = lv_complete ).
+
+      IF lv_complete = abap_true.
+        lv_keysig = ckey_keysig( is_field ).
+
+        IF check_foreign_key( iv_table  = lv_ctab
+                              iv_keysig = lv_keysig
+                              iv_tuple  = lv_tuple ) = abap_false.
+          APPEND build_finding( iv_row    = iv_row
+                                iv_field  = is_field-fieldname
+                                iv_value  = lv_disp
+                                iv_check  = c_check-checktable
+                                iv_object = |{ lv_ctab }/{ lv_keysig }|
+                                iv_msgnr  = '015'
+                                iv_a      = lv_disp
+                                iv_b      = lv_ctab
+                                iv_c      = lv_keysig )
+               TO rt_findings.
+          RETURN.
+        ENDIF.
+
+        " composite check passed -> the single field check is skipped
+        lv_composed = abap_true.
+      ENDIF.
+
+    ENDIF.
+
+    IF lv_ctab IS NOT INITIAL AND lv_composed = abap_false AND
+       check_table( iv_table = lv_ctab iv_field = lv_cfld iv_value = lv_int ) = abap_false.
+      APPEND build_finding( iv_row      = iv_row
+                            iv_field    = is_field-fieldname
+                            iv_value    = lv_disp
+                            iv_check    = c_check-checktable
+                            iv_object   = |{ lv_ctab }/{ lv_cfld }|
+                            iv_msgnr    = '009'
+                            iv_a        = lv_disp
+                            iv_b        = lv_ctab
+                            iv_c        = lv_cfld
+                            iv_severity = COND ty_severity(
+                                WHEN is_field-rule_ctab IS NOT INITIAL
+                                THEN is_field-rule_severity
+                                ELSE c_severity-error )
+                            iv_rule_id  = COND #(
+                                WHEN is_field-rule_ctab IS NOT INITIAL
+                                THEN is_field-rule_id ) )
+           TO rt_findings.
+      RETURN.
+    ENDIF.
+
+    " regex rule ......................................................
+    " FIND REGEX instead of predicate function matches( ) - predicate
+    " functions cannot be compared with = and are not available on
+    " older support packages
+    IF is_field-regex IS NOT INITIAL.
+      FIND REGEX is_field-regex IN lv_disp.
+      IF sy-subrc <> 0.
+        APPEND build_finding( iv_row      = iv_row
+                              iv_field    = is_field-fieldname
+                              iv_value    = lv_disp
+                              iv_check    = c_check-regex
+                              iv_object   = is_field-regex
+                              iv_msgnr    = '010'
+                              iv_a        = lv_disp
+                              iv_severity = is_field-rule_severity
+                              iv_rule_id  = is_field-rule_id )
+               TO rt_findings.
+        RETURN.
+      ENDIF.
+    ENDIF.
+
+    " registered column checks (plugins) ..............................
+    " they run last: only values the validator itself accepted reach
+    " them, the first failing plugin finishes the field. The finding is
+    " built manually: its text comes from the plugin, not the SE91
+    " message class
+    LOOP AT mt_plugins ASSIGNING FIELD-SYMBOL(<fs_plugin>)
+         WHERE fieldname = is_field-fieldname.
+
+      DATA(ls_result) = <fs_plugin>-check->check(
+                          iv_row       = iv_row
+                          iv_fieldname = is_field-fieldname
+                          iv_value     = lv_disp
+                          ir_row       = ir_row ).
+
+      IF ls_result-ok <> abap_true.
+        APPEND VALUE #( row = iv_row fieldname = is_field-fieldname
+                        value = lv_disp
+                        object = ls_result-object
+                        check_type = c_check-plugin
+                        message = ls_result-message
+                        severity = normalize_severity( ls_result-severity )
+                        rule_id  = ls_result-rule_id )
+               TO rt_findings.
+        EXIT.
+      ENDIF.
+    ENDLOOP.
+
+  ENDMETHOD.
+
+
+  METHOD effective_ctab.
+    rv_table = COND #( WHEN is_field-rule_ctab IS NOT INITIAL
+                       THEN is_field-rule_ctab
+                       ELSE is_field-checktable ).
+  ENDMETHOD.
+
+
+  METHOD effective_cfield.
+    rv_field = COND #( WHEN is_field-rule_cfield IS NOT INITIAL
+                       THEN is_field-rule_cfield
+                       WHEN is_field-fkey_checkfield IS NOT INITIAL
+                       THEN is_field-fkey_checkfield
+                       ELSE is_field-fieldname ).
+  ENDMETHOD.
+
+
   METHOD compare_findings.
     LOOP AT mt_compare_rules ASSIGNING FIELD-SYMBOL(<fs_cr>).
 
@@ -2608,15 +2704,16 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       ENDTRY.
 
       IF lv_ok = abap_false.
-        APPEND VALUE #( row = iv_row fieldname = <fs_cr>-field
-                        value = CONV string( <lv_left> )
-                        object = lv_expr
-                        check_type = c_check-compare
-                        message = build_msg( iv_nr = '016'
-                                             iv_a  = CONV string( <lv_left> )
-                                             iv_b  = lv_expr )
-                        severity = normalize_severity( <fs_cr>-severity )
-                        rule_id  = <fs_cr>-rule_id )
+        APPEND build_finding( iv_row      = iv_row
+                              iv_field    = <fs_cr>-field
+                              iv_value    = <lv_left>
+                              iv_check    = c_check-compare
+                              iv_object   = lv_expr
+                              iv_msgnr    = '016'
+                              iv_a        = <lv_left>
+                              iv_b        = lv_expr
+                              iv_severity = <fs_cr>-severity
+                              iv_rule_id  = <fs_cr>-rule_id )
                TO rt_findings.
       ENDIF.
     ENDLOOP.
@@ -2692,17 +2789,18 @@ CLASS zcl_adv_validator IMPLEMENTATION.
 
         READ TABLE lt_seen INTO DATA(ls_seen) WITH TABLE KEY key = lv_key.
         IF sy-subrc = 0.
-          APPEND VALUE #( row = lv_row
-                          fieldname = lv_anchor
-                          value = lv_disp object = lv_object
-                          check_type = c_check-unique
-                          message = build_msg( iv_nr = '017'
-                                               iv_a  = lv_disp
-                                               iv_b  = lv_object
-                                               iv_c  = CONV string( ls_seen-first_row ) )
-                          severity = normalize_severity( <fs_ur>-severity )
-                          rule_id  = <fs_ur>-rule_id )
-                 TO rt_findings.
+          APPEND build_finding( iv_row      = lv_row
+                                iv_field    = lv_anchor
+                                iv_value    = lv_disp
+                                iv_check    = c_check-unique
+                                iv_object   = lv_object
+                                iv_msgnr    = '017'
+                                iv_a        = lv_disp
+                                iv_b        = lv_object
+                                iv_c        = CONV string( ls_seen-first_row )
+                                iv_severity = <fs_ur>-severity
+                                iv_rule_id  = <fs_ur>-rule_id )
+               TO rt_findings.
         ELSE.
           INSERT VALUE #( key = lv_key first_row = lv_row ) INTO TABLE lt_seen.
         ENDIF.
@@ -2726,6 +2824,31 @@ CLASS zcl_adv_validator IMPLEMENTATION.
       APPEND to_upper( CONV string( is_rule-field ) ) TO rt_fields.
     ENDIF.
     SORT rt_fields BY table_line ASCENDING.
+  ENDMETHOD.
+
+
+  METHOD build_finding.
+    rs_finding-row        = iv_row.
+    rs_finding-fieldname  = CONV fieldname( iv_field ).
+    rs_finding-value      = CONV string( iv_value ).
+    rs_finding-check_type = iv_check.
+    rs_finding-object     = iv_object.
+    rs_finding-message    = build_msg( iv_nr = iv_msgnr
+                                       iv_a  = iv_a
+                                       iv_b  = iv_b
+                                       iv_c  = iv_c ).
+    rs_finding-severity   = normalize_severity( iv_severity ).
+    rs_finding-rule_id    = CONV #( iv_rule_id ).
+  ENDMETHOD.
+
+
+  METHOD is_charlike_type.
+    CASE iv_datatype.
+      WHEN c_charlike-char OR c_charlike-numc OR c_charlike-dats
+        OR c_charlike-tims OR c_charlike-accp OR c_charlike-lang
+        OR c_charlike-unit OR c_charlike-cuky OR c_charlike-clnt.
+        rv_ok = abap_true.
+    ENDCASE.
   ENDMETHOD.
 
 

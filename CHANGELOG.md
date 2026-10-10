@@ -1,5 +1,19 @@
 # 更新日志
 
+## 未发布
+
+- 重构（纯内部，公共 API 与行为不变，50 个单测不改自应通过）：
+  `validate( )` 由约 340 行收敛为 8 段清晰编排——列过滤抽
+  `apply_column_filters( )`，规则/plugin/比较/查重的结构性检查（003/020）
+  抽 `rule_registration_findings( )`，单字段检查链
+  （required→初始放行→格式→域值→检查表→正则→插件，每字段每行首错即止）
+  抽 `check_field( )`；"生效检查表/生效检查字段"在行循环与两处预取里
+  重复三份的 COND 收敛为 `effective_ctab( )` / `effective_cfield( )`；
+  消息类 finding 的 ~15 处追加样板统一为 `build_finding( )` 骨架
+  （severity 经 normalize、文本经 build_msg 单一漏斗；插件 finding 因
+  自由文本保留手工构造）；截断预检的字符类型九连 OR 收敛为
+  `is_charlike_type( )`；validate 段落注释重新编号 1–8
+
 ## v2.0.0（2026-10）
 
 - 修复（真机主类激活：类型不兼容）：apply_db_rules 里
