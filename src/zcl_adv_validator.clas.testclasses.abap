@@ -1436,27 +1436,6 @@ CLASS ltcl_db_rules IMPLEMENTATION.
   METHOD db_rules_roundtrip.
     CONSTANTS lc_scenario TYPE c LENGTH 30 VALUE 'ZADV_UNIT_TEST'.
 
-    " component order of the real table row INCLUDING MANDT: dynamic
-    " INSERT dbtab matches positionally against the complete row (no
-    " automatic client fill like the static form), so the client column
-    " must be present and filled with the current client
-    TYPES: BEGIN OF ty_tabl_row,
-             mandt       TYPE mandt,
-             scenario    TYPE c LENGTH 30,
-             rule_id     TYPE c LENGTH 30,
-             fieldname   TYPE fieldname,
-             rule_type   TYPE c LENGTH 10,
-             operator    TYPE c LENGTH 2,
-             other_field TYPE fieldname,
-             required    TYPE flag,
-             severity    TYPE c LENGTH 1,
-             regex       TYPE c LENGTH 255,
-             checktable  TYPE tabname,
-             checkfield  TYPE fieldname,
-             domname     TYPE c LENGTH 30,
-           END OF ty_tabl_row,
-           ty_tabl_rows TYPE STANDARD TABLE OF ty_tabl_row WITH EMPTY KEY.
-
     TYPES: BEGIN OF ty_row,
              mail      TYPE string,
              date_from TYPE budat,
@@ -1475,31 +1454,35 @@ CLASS ltcl_db_rules IMPLEMENTATION.
     DATA(lv_count) = 0.
     DATA lt_findings TYPE zcl_adv_validator=>ty_findings.
 
-    " transient customizing content of this LUW; dynamic table name in
-    " a variable on purpose (no literal in the dynamic position, no
-    " inline VALUE at the FROM TABLE operand - neither is accepted by
-    " the 7.40 SP08 syntax check), and the test class must not create
-    " an activation dependency either
-    DATA(lv_tab) = CONV string( 'ZADV_RULES' ).
-
-    DATA lt_insert TYPE ty_tabl_rows.
-    lt_insert = VALUE #(
-      ( mandt = sy-mandt scenario = lc_scenario rule_id = 'R1' rule_type = 'COLUMN'
+    " static typed DML on purpose: two real machine rounds showed that
+    " the row structure rules of the dynamic INSERT (name) FROM TABLE
+    " (positional match, client handling) are nothing to guess about.
+    " Rows of the table's own type are filled BY NAME, the client is
+    " filled automatically. Small price: this test class gets an
+    " activation dependency on the table object (abapGit activates
+    " DDIC first); the main class keeps its dynamic SELECT precisely
+    " to stay independent of it
+    DATA lt_seed TYPE STANDARD TABLE OF zadv_rules WITH EMPTY KEY.
+    lt_seed = VALUE #(
+      ( scenario = lc_scenario rule_id = 'R1' rule_type = 'COLUMN'
         fieldname = 'MAIL' regex = `^a+$` severity = 'W' )
-      ( mandt = sy-mandt scenario = lc_scenario rule_id = 'R2' rule_type = 'COMPARE'
+      ( scenario = lc_scenario rule_id = 'R2' rule_type = 'COMPARE'
         fieldname = 'DATE_FROM' operator = 'LE' other_field = 'DATE_TO' ) ).
 
-    DELETE FROM (lv_tab) WHERE scenario = lc_scenario.
+    TRY.
+        DELETE zadv_rules WHERE scenario = lc_scenario.
+        INSERT zadv_rules FROM TABLE lt_seed.
+      CATCH cx_root INTO DATA(lx_dml) ##NO_TEXT.
+        ROLLBACK WORK.
+        cl_abap_unit_assert=>assert_fail(
+            msg = |DML on ZADV_RULES raised: { lx_dml->get_text( ) }| ).
+        RETURN.
+    ENDTRY.
 
-    INSERT (lv_tab) FROM TABLE lt_insert.
-
-    " surface DML problems as a finding with a message instead of a
-    " naked runtime error further down
     IF sy-subrc <> 0.
       ROLLBACK WORK.
-      cl_abap_unit_assert=>assert_equals(
-          exp = 0 act = sy-subrc
-          msg = |INSERT into ZADV_RULES failed with sy-subrc { sy-subrc }| ).
+      cl_abap_unit_assert=>assert_fail(
+          msg = |INSERT into ZADV_RULES returned sy-subrc { sy-subrc }| ).
       RETURN.
     ENDIF.
 

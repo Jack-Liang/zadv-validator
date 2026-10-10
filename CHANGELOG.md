@@ -7,13 +7,14 @@
   还原（回滚先于断言，失败也清理）。关闭两个空表盲区：
   ① 有数据时的完整加载回路；② `add_rules_from_db` 的 SELECT 列名/结构映射
   ——列名写错会抛异常并被宽容 catch 吞成"0 条"，空场景用例无法分辨。
-  真机两轮修正：a) 首轮标 RISK LEVEL DANGEROUS 被运行配置跳过
+  真机三轮修正：a) 首轮标 RISK LEVEL DANGEROUS 被运行配置跳过
   （"risk level of test class exceeds upper limit"）——降为 CRITICAL
   （临时写持久数据、同 LUW 回滚，未触碰仓库/定制对象，语义本就属
-  CRITICAL 档）；b) 动态 `INSERT (表) FROM TABLE` 按位置匹配**完整表行**
-  （不像静态形式自动补客户端），插入结构补 MANDT 首列并显式填
-  `sy-mandt`，INSERT 后加 sy-subrc 检查，DML 问题以带消息的断言失败
-  呈现而非裸异常。
+  CRITICAL 档）；b/c) 动态 `INSERT (表) FROM TABLE` 的行结构规则
+  （按位匹配/客户端列处理）两轮真机未过，弃用——改静态类型化 DML
+  （`TYPE zadv_rules` 内表按组件名填充，客户端自动），代价是测试类对
+  表对象的激活依赖（abapGit 先激活 DDIC，主类仍走动态 SELECT 保持
+  独立）；DML 包 TRY，异常转带消息的 assert_fail 而非裸错误。
   顺带更正历史计数：v1.1.0 实为 48 例（误记 47），v2.0.0 实为 51 例
   （误记 50），累计笔误 +1，下文两处已订正
 - 重构（纯内部，公共 API 与行为不变，50 个单测不改自应通过）：
