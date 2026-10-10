@@ -1,5 +1,7 @@
 # zadv-validator — 基于 DDIC 的 ABAP 内表通用校验器
 
+[English](README_EN.md)
+
 传入任意内表，自动根据 DDIC 元数据（域固定值、检查表、转换出口、数据类型）
 校验每个字段的每个值，逐行逐字段指出不合法的输入。适合文件上传/批量导入
 （Excel、CSV）入库前的合法性检查。
@@ -23,6 +25,8 @@
 | 转换出口 | 自动（CONVEXIT） | 比较前调用 `CONVERSION_EXIT_xxx_INPUT`（存在性查 TFDIR，失败回退原值） |
 | 必填 `REQUIRED` | 规则 | 初始值默认放行，标记 required 后报错 |
 | 插件 `PLUGIN` | 注册（`add_column_check`） | 实现接口 `ZIF_ADV_COLUMN_CHECK` 的自定义单列校验类，逐行收到 值+整行引用（可做简单跨字段）；自行决定 ok/文本/severity/rule_id |
+| 比较 `COMPARE` | 规则（`add_compare_rule`） | 声明式跨字段比较：`field operator other`（EQ/NE/LT/LE/GT/GE），如 DATE_FROM <= DATE_TO；任一操作数为初始值时跳过（要拦截空值请配合 required）；行级规则，不受列过滤影响 |
+| 查重 `UNIQUE` | 规则（`add_unique_rule`） | 声明式文件内查重：字段组合在整个表中必须唯一，首次出现放行、后续重复报错（消息注明首次所在行）；组合内字段全为初始值的行豁免 |
 | 正则 `REGEX` | 规则 | 用于无 DDIC 类型的字段（如 string 邮箱）；按子串搜索匹配，需全串匹配请用 `^...$` 包裹 |
 | 大小写 | 自动 | 域非 lowercase 时按大写比较，兼容从小写来源导入的数据 |
 
@@ -48,6 +52,11 @@ lo_validator->add_rules( VALUE #(
   ( fieldname = 'NOTIFY' regex = `^X?$` severity = 'W' rule_id = 'R01' )
   ( fieldname = 'WERKS'  checktable = 'T001W' ) ) ).  " 覆盖/补充 DDIC 检查表
 
+" 可选：声明式跨字段比较与文件内查重（见下文专章）
+lo_validator->add_compare_rule( VALUE #( field = 'DATE_FROM' operator = 'LE'
+                                         other = 'DATE_TO' rule_id = 'R_PERIOD' ) ).
+lo_validator->add_unique_rule(  VALUE #( field = 'REF_ID' rule_id = 'R_DUP_REF' ) ).
+
 DATA(lt_findings) = lo_validator->validate( gt_upload ).
 
 IF lt_findings IS INITIAL.
@@ -57,6 +66,11 @@ ELSE.
   zcl_adv_validator=>display_findings(
       it_findings = lt_findings
       iv_title    = 'Upload validation' ).
+
+  " 或落应用日志（SLG1 查看；对象需先在 SLG0 注册）：
+  " zcl_adv_validator=>log_findings(
+  "     it_findings = lt_findings
+  "     iv_object   = 'ZUPLOAD' iv_commit = abap_true ).
 
   " 或自行处理，例如只拦截错误、放行警告：
   " LOOP AT lt_findings TRANSPORTING NO FIELDS
@@ -174,17 +188,93 @@ lo_validator->add_column_check(
   直接给出（不经 SE91 消息类）
 - `clear_column_checks( )` 清空全部注册
 
+## 跨字段与行间规则（声明式）
+
+插件适合带自定义逻辑的校验；如果只是"字段之间比大小"、"文件里不许有重复"，
+不用写类，直接声明规则即可：
+
+```abap
+" 跨字段比较：BUDAT <= DATE_TO（操作符 EQ/NE/LT/LE/GT/GE）
+" finding 定位在左操作数字段上，object 为 'BUDAT <= DATE_TO'
+lo_validator->add_compare_rule( VALUE #(
+    field    = 'BUDAT'
+    operator = 'LE'
+    other    = 'DATE_TO'
+    severity = 'W'
+    rule_id  = 'R_PERIOD' ) ).
+
+" 文件内查重：REF_ID+WERKS 组合全表唯一
+" 首次出现放行，后续重复报错并注明首次所在行
+lo_validator->add_unique_rule( VALUE #(
+    field    = 'REF_ID'            " finding 定位字段（锚点）
+    fields   = VALUE #( ( `REF_ID` ) ( `WERKS` ) )
+    rule_id  = 'R_DUP_KEY' ) ).
+```
+
+- **比较规则**逐行执行，在列级检查之后、与列过滤无关（行级规则）；任一
+  操作数为**初始值时跳过**比较——要拦截空值请给字段加 `required` 规则。
+  两个无法比较的值（如数字串与文本）按违反处理
+- **查重规则**在整表扫描后执行，与列过滤无关；`fields` 为空时退化为仅
+  `field` 单字段查重；组合按字段名**排序**后求值，finding 的
+  `value/object` 顺序确定（`WERKS+REF_ID`）与注册顺序无关；组合内字段
+  **全为初始值**的行豁免（与"初始值放行"的整体口径一致）
+- 未知字段名、非法操作符（非 EQ/NE/LT/LE/GT/GE）在 validate 时报
+  STRUCTURE finding（消息 003/020），不会静默失效
+- finding 类别：`c_check-compare` / `c_check-unique`；severity 缺省 E，
+  `rule_id` 回显，与列级规则一致
+- `clear_compare_rules( )` / `clear_unique_rules( )` 清空各自注册；
+  复杂逻辑（跨行聚合、条件依赖）仍建议走插件或调用方自处理
+
+## 暂存 STRING 截断预检
+
+文件上传常先进 string 暂存表再 MOVE 到 DDIC 目标结构——超长值会被
+**静默截断**。入库前用静态方法预先预警：
+
+```abap
+" it_data：string 暂存表；iv_typename：目标 DDIC 表/结构名
+DATA(lt_findings) = zcl_adv_validator=>precheck_truncation(
+    it_data     = lt_staging
+    iv_typename = 'ZTARGET' ).        " 缺省 severity = W（预警）
+```
+
+- 只比较**两边同名**的列；目标侧仅字符类类型（CHAR/NUMC/DATS/TIMS/ACCP/
+  LANG/UNIT/CUKY/CLNT）参与——金额/数量类赋值报错而非截断，无需预警
+- 值长度（string 转换去尾部空格后）> 目标字段长度 → `TRUNCATION` finding
+  （`c_check-truncation`），`object` 为 `目标/字段`，severity 可用
+  `iv_severity` 覆盖（缺省 W）
+- 目标不存在/非 DDIC 结构 → STRUCTURE finding（消息 012），不抛异常
+- 暂存侧的 raw/xstring 列无文本长度概念，自动跳过
+
+## 应用日志（BAL）
+
+把 findings 写成 SLG1 可查的应用日志（每条 finding 一条消息，消息类型 =
+severity，finding 文本经通用消息 018 分装到 4×50 字符占位符）：
+
+```abap
+DATA(lv_log_handle) = zcl_adv_validator=>log_findings(
+    it_findings = lt_findings
+    iv_object   = 'ZUPLOAD'          " 需先在 SLG0 注册（或用自有对象）
+    iv_subobject = 'VALIDATE'
+    iv_extnumber = |upload { sy-datum }|
+    iv_commit   = abap_true ).       " 可选：helper 内直接 COMMIT WORK
+```
+
+- 返回日志句柄；findings 为空、对象未注册或 BAL 出错时返回初始值，
+  **从不抛异常**（结果请看 SLG1）
+- 保存在当前 LUW，提交由调用方控制；不在更大事务里时可用
+  `iv_commit = abap_true` 让 helper 直接提交
+
 ## 返回结构 ty_finding
 
 | 字段 | 含义 |
 |---|---|
 | `row` | 行号（表内顺序计数）；0 表示结构性问题（表行非结构、规则字段不存在） |
 | `fieldname` | 字段名 |
-| `value` | 原始输入值（外部格式，直接可读） |
-| `check_type` | STRUCTURE / REQUIRED / DOMAIN / CHECKTABLE / DATE / TIME / NUMC / REGEX |
-| `object` | 涉及对象：域名、`检查表/字段`（组合外键为 `检查表/字段1+字段2`）或 正则 |
-| `message` | 消息文本，取自 SE91 消息类 `ZADV_VALIDATOR`（001–015），可 SE63 翻译；调用方也可用前 5 个字段自建消息。注意占位符最长 50 字符，超长 `value` 会被截断，完整值请看 `value` 字段 |
-| `severity` | `E` / `W` / `I`（`c_severity-error/warning/info`），**永不为空**：DDIC 类检查恒为 `E`；规则类检查取规则 `severity`（缺省/非法值归一为 `E`） |
+| `value` | 原始输入值（外部格式，直接可读）；查重 finding 为组合值（`值1/值2`，按字段名排序） |
+| `check_type` | STRUCTURE / REQUIRED / DOMAIN / CHECKTABLE / DATE / TIME / NUMC / REGEX / PLUGIN / COMPARE / UNIQUE / TRUNCATION |
+| `object` | 涉及对象：域名、`检查表/字段`（组合外键为 `检查表/字段1+字段2`）、正则、比较表达式（`字段1 <= 字段2`）、查重字段组合（`字段1+字段2`）或 截断预检的 `目标/字段` |
+| `message` | 消息文本，取自 SE91 消息类 `ZADV_VALIDATOR`（001–020），可 SE63 翻译；调用方也可用前 5 个字段自建消息。注意占位符最长 50 字符，超长 `value` 会被截断，完整值请看 `value` 字段 |
+| `severity` | `E` / `W` / `I`（`c_severity-error/warning/info`），**永不为空**：DDIC 类检查恒为 `E`；规则类检查取规则 `severity`（缺省/非法值归一为 `E`）；截断预检缺省 `W` |
 | `rule_id` | 仅规则来源的 finding 填充（回显规则里的 `rule_id`，便于程序分支/统计）；DDIC 类 finding 保持空 |
 
 ## 工作原理
@@ -199,8 +289,10 @@ lo_validator->add_column_check(
    元组用 OR-of-ANDs 一次查库；伙伴字段为空的行回退单列批量预取。
    动态 SQL 失败（生成表/视图等不可读）时不缓存，逐值回退到宽容模式。
 3. 逐行逐字段：required → 初始值放行 → 转换出口+大小写归一 → 格式检查
-   → 域固定值 → 检查表 → 正则；每个字段每行只报第一个错误，
-   避免错误级联噪音。此时检查表查询几乎全部命中缓存，不再逐值查库。
+   → 域固定值 → 检查表 → 正则 → 插件；每个字段每行只报第一个错误，
+   避免错误级联噪音。每行的字段级检查之后执行声明式比较规则（行级，
+   与列过滤无关）；行循环结束后整表执行查重规则。此时检查表查询几乎
+   全部命中缓存，不再逐值查库。
 4. 缓存：域固定值（按域）、检查表命中（按 表+字段+值）、转换出口存在性
    （按出口名）均为实例级缓存；`clear_caches( )` 可在定制数据变更后清空。
 
@@ -232,11 +324,11 @@ abaplint.json                            abaplint 基础规则（CI 静态检查
 .github/workflows/abaplint.yml           GitHub Actions：push/PR 自动跑 abaplint
 src/
   package.devc.xml                        包 ZADV_VALIDATOR
-  zadv_validator.msag.xml                 SE91 消息类 ZADV_VALIDATOR（001–015）
+  zadv_validator.msag.xml                 SE91 消息类 ZADV_VALIDATOR（001–020）
   zif_adv_metadata.intf.abap              元数据常量接口（版本/作者/仓库/许可/描述）
   zif_adv_column_check.intf.abap           校验插件接口（自定义单列校验）
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，实现 ZIF_ADV_METADATA 暴露库元数据）
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（35 个用例）
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit 测试（47 个用例）
   zadv_demo.prog.abap                     演示报表
 ```
 
@@ -252,12 +344,18 @@ src/
 拦截并验证 DD05S 非同名映射 REGIO→BLAND、伙伴为空的宽容回退、缓存幂等）、
 CURR/QUAN 参照（MARA GEWEI→T006/MSEHI 含 CUNIT 转换、VBAK WAERS→
 TCURC/WAERS，有效值通过 + 未知代码拦截）、元数据接口完整性
-（版本为语义化格式、仓库为 GitHub 地址、类别名与接口常量一致）。
+（版本为语义化格式、仓库为 GitHub 地址、类别名与接口常量一致）、
+插件（string 列自定义校验 + severity/rule_id 回显、未知字段、经 ir_row
+的跨字段）、比较规则（违反定位在左操作数/满足与初始值跳过/未知字段与
+非法操作符的 STRUCTURE 报告）、查重规则（组合重复报错并验证排序无关性、
+全初始行豁免、未知字段）、截断预检（超长值 W 级报告、合规值与暂存特有
+列放行）、BAL 消息映射（severity→消息类型、4×50 字符分块、空 findings
+不建日志）、小写域与区间型域值（运行期从 DD01L/DD07L 发现样例对象，
+不硬编码跨版本依赖；无样例的系统上自动跳过）。
 KNA1/MARA/VBAK/VBELN 等应用 DDIC 对象一律运行时解析（RTTI 动态建表、
 逐组件赋值），测试类不含对应用表的静态类型引用——缺这些对象的系统
 （如无 SD/MM 的精简安装）上相关用例自动空跑跳过，不再阻塞类激活；
-依赖真实主数据的场景（真实检查表 T001 等）仍以 demo 演示为主；
-小写域、区间型域值因缺少跨版本稳定的样例域，暂未纳入单测。
+依赖真实主数据的场景（真实检查表 T001 等）仍以 demo 演示为主。
 
 ## 路线图
 
@@ -276,15 +374,15 @@ KNA1/MARA/VBAK/VBELN 等应用 DDIC 对象一律运行时解析（RTTI 动态建
 - [x] 计划外交付：库元数据接口 `ZIF_ADV_METADATA`（c_version 等常量）、7.40 SP08
   真机激活兼容与短转储防护、demo v1.0 演示段（运行期解析 DDIC，最小系统可激活）
 
-### v1.1（延续）
+### v1.1（延续）——已完成
 - [x] **校验插件化**：新增自包含接口 `ZIF_ADV_COLUMN_CHECK` + `add_column_check( )` 注册开放点，自定义单列校验（含经整行引用 ir_row 的简单跨字段）；内置校验保留在类内——与批量预取/缓存紧耦合，组合外键本身跨字段，拆出反而损失性能与行为兼容
-- [ ] 跨字段与行间规则：如 DATE_FROM <= DATE_TO、文件内查重（自定义跨字段已可经插件 ir_row 实现，声明式框架待做）
+- [x] **跨字段与行间规则（声明式）**：`add_compare_rule( )` 行级比较（field operator other，EQ/NE/LT/LE/GT/GE，初始操作数跳过）与 `add_unique_rule( )` 文件内查重（字段组合唯一，首次放行后续报错、全初始行豁免）；均为行级/表级规则，不受列过滤影响，未知字段/非法操作符报 STRUCTURE
 - [x] finding 增强（severity/规则 ID）：`ty_finding` 新增 `severity`（E/W/I，永不为空；DDIC 类恒 E，规则类取规则值）与 `rule_id`（仅规则来源回显）；`ty_rule` 新增 `severity`（缺省/非法归一 E）与 `rule_id`
 - [x] ALV 输出 helper：`display_findings( )` 静态方法（SALV 优化列宽 + 可选标题，无 SALV 回退经典列表）
-- [ ] BAL 应用日志 helper
-- [ ] 暂存 STRING 字段截断预检（超长值入库前预警）
-- [ ] 单测补遗：小写域、区间型域值（待选定跨版本稳定的样例域，或以 CDS/临时 DDIC 方式自建）
-- [ ] README 英文版
+- [x] BAL 应用日志 helper：`log_findings( )` 静态方法（每 finding 一条消息，severity→消息类型，文本 4×50 分块；SLG1 查看，宽容不抛异常，LUW 提交由调用方控制）
+- [x] 暂存 STRING 截断预检：`precheck_truncation( )` 静态方法（string 暂存表 vs 目标 DDIC 结构同名列长度，超长预警 W，仅字符类目标参与）
+- [x] 单测补遗：小写域、区间型域值——不再依赖硬编码样例域，运行期从 DD01L（lowercase）/DD07L（区间行）发现样例对象，无样例系统自动跳过
+- [x] README 英文版（README_EN.md，与中文版同构）
 
 ### v2.0+（生态与场景）
 - [ ] 规则配置表：校验规则存自定义表，顾问可维护、可传输，免改代码
