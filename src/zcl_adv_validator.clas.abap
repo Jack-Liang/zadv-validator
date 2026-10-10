@@ -526,7 +526,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         " not be mixed with dynamic table/WHERE on older support packages;
         " the dynamic condition is passed as an internal table, the most
         " compatible form across all releases
-        DATA: lt_cond TYPE STANDARD TABLE OF c LENGTH 255,
+        TYPES ty_cnd TYPE c LENGTH 255.
+
+        DATA: lt_cond TYPE STANDARD TABLE OF ty_cnd,
               lv_cnt  TYPE i.
 
         APPEND lv_where TO lt_cond.
