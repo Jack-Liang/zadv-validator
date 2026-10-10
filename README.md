@@ -126,6 +126,7 @@ lo_validator->exclude_fields( VALUE #( ( 'REMARK' ) ) ).
 ## 仓库结构
 
 ```
+CHANGELOG.md                             更新日志
 src/
   package.devc.xml                        包 ZADV_VALIDATOR
   zcl_adv_validator.clas.abap             校验器（类型、常量、方法全部在类中，无接口依赖）
@@ -139,6 +140,32 @@ src/
 覆盖：合法行零误报、非法日期/时间/域值、正则与必填规则、规则字段缺失、
 非结构化表拒绝、列过滤（only/exclude 及白名单字段名纠错）。检查表类用例
 依赖系统主数据，故在 demo 中演示而非单测。
+
+## 路线图
+
+### v0.3（近期：性能与工程化）
+- [ ] **检查表批量查询**：按列收集去重值后 `WHERE field IN (...)` 分批查询，替代逐值 `SELECT COUNT(*)`——大表导入的主要性能瓶颈
+- [ ] **消息类化（SE91）**：错误文本迁入消息类，支持 SE63 翻译（当前硬编码英文）
+- [ ] 单测补强：转换出口（ALPHA）、小写域、区间型域值、缓存幂等、规则覆盖 DDIC
+- [ ] abaplint 基础配置（CI 静态检查）
+
+### v1.0（功能完整版）
+- [ ] **完整外键映射**：读 DD05S，支持非同名检查表字段与组合键（多字段外键）
+- [ ] **校验插件化**：抽出单列校验器接口（域值/检查表/格式/正则各自实现类），开放注册自定义校验
+- [ ] 跨字段与行间规则：如 DATE_FROM <= DATE_TO、文件内查重（依赖插件化）
+- [ ] finding 增强：severity（E/W/I）、规则 ID；BAL 应用日志与 ALV 输出 helper
+- [ ] CURR/QUAN 参照校验：货币列参照 TCURC、单位列参照 T006（DFIES-REFTABLE/REFFIELD 自动识别）
+- [ ] 暂存 STRING 字段截断预检（超长值入库前预警）
+- [ ] README 英文版
+
+### v2.0+（生态与场景）
+- [ ] 规则配置表：校验规则存自定义表，顾问可维护、可传输，免改代码
+- [ ] Excel 上传端到端示例（abap2xlsx → 暂存表 → 校验 → ALV）
+- [ ] ABAP Cloud 适配可行性调研（以 released 对象替代 DD07L/DD01L/TFDIR 直读与动态 SQL）
+- [ ] GitHub Actions：abaplint + abapGit trial 系统自动激活与单测
+- [ ] 大表分批/并行校验
+
+明确不做：7.02 及以下语法降级（维护成本大于收益）、多包拆分、替代 RAP 校验。
 
 ## License
 
