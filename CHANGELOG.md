@@ -2,6 +2,12 @@
 
 ## v1.1.0（2026-10）
 
+- 修复（7.40 SP08 测试类激活三处报错，均在区间域值用例的发现 SELECT）：
+  `@space` 作宿主变量该版本拒绝（错误指向 WHERE 里的 DOMVALUE_H 列），
+  内联 `INTO @DATA( )` 的结构派生随之失效（LS_INTERVAL-DOMNAME unknown）；
+  改为显式局部结构 + 空格字面量 `domvalue_h <> ' '` +
+  `INTO CORRESPONDING FIELDS OF`（与主类已在真机验证过的动态 SELECT
+  同款写法）
 - 声明式跨字段与行间规则（v1.1）：`add_compare_rule( )` 行级比较——
   field/operator/other（EQ NE LT LE GT GE），任一操作数为初始值时跳过
   （要拦截空值请配合 required），无法比较的值按违反处理；finding 定位在

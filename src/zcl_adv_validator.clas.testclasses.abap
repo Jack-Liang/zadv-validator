@@ -1134,13 +1134,24 @@ CLASS ltcl_validate IMPLEMENTATION.
     " upper bound is only accepted when the interval logic works -
     " single value logic would reject it, because it is not the start
     " of its own row. The sample domain is discovered at runtime from
-    " dd07l, systems without any interval domain skip the test
-    SELECT SINGLE domname, domvalue_l AS low, domvalue_h AS high
+    " dd07l, systems without any interval domain skip the test.
+    " Explicit target structure on purpose: the 7.40 SP08 syntax check
+    " rejected @space as a host variable (and the inline @DATA( )
+    " derivation of that statement followed it into the dump); a blank
+    " literal plus INTO CORRESPONDING FIELDS activate cleanly
+    TYPES: BEGIN OF ty_domrow,
+             domname    TYPE dd07l-domname,
+             domvalue_l TYPE dd07l-domvalue_l,
+             domvalue_h TYPE dd07l-domvalue_h,
+           END OF ty_domrow.
+    DATA ls_interval TYPE ty_domrow.
+
+    SELECT SINGLE domname, domvalue_l, domvalue_h
       FROM dd07l
       WHERE as4local = 'A'
-        AND domvalue_h <> @space
+        AND domvalue_h <> ' '
         AND domvalue_l <> domvalue_h
-      INTO @DATA(ls_interval).
+      INTO CORRESPONDING FIELDS OF @ls_interval.
     IF sy-subrc <> 0.
       RETURN.
     ENDIF.
@@ -1154,15 +1165,15 @@ CLASS ltcl_validate IMPLEMENTATION.
         exp = abap_true
         act = lo_validator->check_domain(
                   iv_domname = ls_interval-domname
-                  iv_value    = CONV #( ls_interval-low ) )
-        msg = |{ ls_interval-low } must be valid for { ls_interval-domname }| ).
+                  iv_value    = CONV #( ls_interval-domvalue_l ) )
+        msg = |{ ls_interval-domvalue_l } must be valid for { ls_interval-domname }| ).
 
     cl_abap_unit_assert=>assert_equals(
         exp = abap_true
         act = lo_validator->check_domain(
                   iv_domname = ls_interval-domname
-                  iv_value    = CONV #( ls_interval-high ) )
-        msg = |{ ls_interval-high } is the interval end and must be valid| ).
+                  iv_value    = CONV #( ls_interval-domvalue_h ) )
+        msg = |{ ls_interval-domvalue_h } is the interval end and must be valid| ).
   ENDMETHOD.
 
 
