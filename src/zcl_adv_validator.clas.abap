@@ -22,7 +22,7 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         required   TYPE abap_bool,
         checktable TYPE tabname,
         checkfield TYPE fieldname,
-        domname    TYPE domname_l,
+        domname    TYPE c LENGTH 30,
         regex      TYPE string,
       END OF ty_rule,
       ty_rules TYPE STANDARD TABLE OF ty_rule WITH EMPTY KEY.
@@ -85,13 +85,13 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
       ty_fields TYPE SORTED TABLE OF ty_field WITH UNIQUE KEY fieldname,
 
       BEGIN OF ty_domval,
-        domvalue_l TYPE domvalue_l,
-        domvalue_h TYPE domvalue_h,
+        domvalue_l TYPE dd07l-domvalue_l,
+        domvalue_h TYPE dd07l-domvalue_h,
       END OF ty_domval,
       ty_domvals TYPE STANDARD TABLE OF ty_domval WITH EMPTY KEY,
 
       BEGIN OF ty_domain,
-        domname   TYPE domname_l,
+        domname   TYPE c LENGTH 30,
         lowercase TYPE abap_bool,
         values    TYPE ty_domvals,
       END OF ty_domain,
@@ -124,11 +124,11 @@ CLASS zcl_adv_validator DEFINITION PUBLIC FINAL CREATE PUBLIC.
         RETURNING VALUE(rt_fields) TYPE ty_fields,
 
       get_domain
-        IMPORTING iv_domname       TYPE domname_l
+        IMPORTING iv_domname       TYPE c LENGTH 30
         RETURNING VALUE(rs_domain) TYPE ty_domain,
 
       check_domain
-        IMPORTING iv_domname       TYPE domname_l
+        IMPORTING iv_domname       TYPE c LENGTH 30
                   iv_value         TYPE string
         RETURNING VALUE(rv_ok)     TYPE abap_bool,
 
@@ -273,9 +273,9 @@ CLASS zcl_adv_validator IMPLEMENTATION.
         ENDCASE.
 
         " domain fixed values .............................................
-        DATA(lv_dom) = COND domname_l( WHEN <fs_field>-rule_domname IS NOT INITIAL
-                                       THEN <fs_field>-rule_domname
-                                       ELSE <fs_field>-domname ).
+        DATA(lv_dom) = COND #( WHEN <fs_field>-rule_domname IS NOT INITIAL
+                              THEN <fs_field>-rule_domname
+                              ELSE <fs_field>-domname ).
 
         DATA lv_lowercase        TYPE abap_bool VALUE abap_false.
         DATA lv_has_fixed_values TYPE abap_bool VALUE abap_false.
