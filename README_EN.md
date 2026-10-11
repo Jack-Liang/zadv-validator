@@ -572,7 +572,7 @@ src/
   zif_adv_metadata.intf.abap              metadata constants interface (version/author/repo/license/description)
   zif_adv_column_check.intf.abap           plugin interface (custom single column checks)
   zcl_adv_validator.clas.abap             the validator (types, constants, methods in one class, implements ZIF_ADV_METADATA)
-  zcl_adv_validator.clas.testclasses.abap ABAP Unit tests (52 cases, one of them RISK LEVEL CRITICAL: a real ZADV_RULES round trip, written and rolled back)
+  zcl_adv_validator.clas.testclasses.abap ABAP Unit tests (52 cases; one does a real ZADV_RULES round trip in a dedicated scenario, rolled back automatically by the AUnit framework)
   zadv_demo.prog.abap                     demo report
 ```
 

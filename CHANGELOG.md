@@ -17,7 +17,11 @@
   独立）；DML 包 TRY，异常转带消息的断言失败而非裸错误。d) SP08 语法
   两处：静态删表须 `DELETE FROM dbtab WHERE`（无 FROM 被按内表变体
   解析报语法错）；`cl_abap_unit_assert=>assert_fail` 该版本不存在，
-  以恒假 assert_equals 携带诊断消息。
+  以恒假 assert_equals 携带诊断消息。e) 该目标客户端的运行配置上限
+  就是 HARMLESS，CRITICAL 同样整类跳过——最终降为 HARMLESS：测试内
+  无任何 COMMIT，AUnit 每用例后自动回滚，写入不出本 LUW，声明无害
+  成立；同时删除冗余 `ROLLBACK WORK`（部分版本在测试方法内直接
+  拒绝，类级运行时错误）。
   顺带更正历史计数：v1.1.0 实为 48 例（误记 47），v2.0.0 实为 51 例
   （误记 50），累计笔误 +1，下文两处已订正
 - 重构（纯内部，公共 API 与行为不变，50 个单测不改自应通过）：

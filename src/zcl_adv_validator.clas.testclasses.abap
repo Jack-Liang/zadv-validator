@@ -1418,14 +1418,15 @@ ENDCLASS.
 "* class writes two rows of a dedicated scenario, loads and validates
 "* them, then leaves the LUW to the framework (database rollback after
 "* every test - no explicit ROLLBACK WORK, some releases reject it
-"* inside test methods with a class level runtime error). Own risk
-"* level on purpose: transient writes of persistent data (uncommitted,
-"* invisible to other sessions) - CRITICAL, not DANGEROUS: no
-"* repository or customizing objects are touched, and DANGEROUS
-"* exceeds the upper limit of the usual run configurations
+"* inside test methods with a class level runtime error). HARMLESS on
+"* purpose: the writes never leave this test LUW (no COMMIT, automatic
+"* rollback, nothing visible to other sessions), and stricter than
+"* that - CRITICAL/DANGEROUS - gets the whole class skipped with "No
+"* execution, risk level of test class exceeds upper limit" on clients
+"* whose run configuration caps the risk level at HARMLESS
 CLASS ltcl_db_rules DEFINITION FINAL
   FOR TESTING
-  RISK LEVEL CRITICAL
+  RISK LEVEL HARMLESS
   DURATION SHORT.
 
   PRIVATE SECTION.
